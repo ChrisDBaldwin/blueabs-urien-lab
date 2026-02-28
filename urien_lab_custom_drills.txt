@@ -1,0 +1,35 @@
+# Urien Lab Custom Drills
+# Edit NAME: lines to rename your combos, then press Alt+9 in-game to reload
+---
+ID:URTTH
+NAME:Tackle Tackle Headbutt
+NOTATION_SF:d+HP, [DB]F+MK, [DB]F+MK, [D]U+MP
+NOTATION_NP:2HP, 236MK, 5MK, j.MP
+DIFFICULTY:5
+SETUP:0EE8,FFFF9800,A0,A0,full,0,0,stand,1
+SEQ:d+HP,H,A00180018|d+HP,H,A00180018|qcf+MK,H,S003b003b|MK,H,S003b003b|j.MP,H,S002a002a
+SUCCESS:5
+HINT: Charge DB > QCF->DB+MK for the first tackle. Second tackle can land if screen shakes up
+---
+---
+ID:c_06
+NAME:j.HK > st.MP > L.Tackle (3-piece)
+NOTATION_SF:j.HK, MP, b~f+LK
+NOTATION_NP:j.HK, 5MP, [4]6LK
+DIFFICULTY:3
+SETUP:FFFFA800,5800,A0,A0,full,1,0,stand,1
+SEQ:j.HK,H,A003a002e|st.MP,H,A00030003|L.Tackle,H,S003a003a
+SUCCESS:3
+HINT:start charging for tackle after jumping
+---
+---
+ID:c_09
+NAME:cr.HP > M.Tackle > M.Tackle > M.Headbutt
+NOTATION_SF:d+HP, b~f+MK, b~f+MK, d~u+MK
+NOTATION_NP:2HP, [4]6MK, [4]6MK, [2]8MK
+DIFFICULTY:4
+SETUP:6300,FFFF9800,A0,A0,full,1,1,stand,1
+SEQ:cr.HP,H,A00180018|M.Tackle,H,S003b003b|M.Tackle,H,S003b003b|M.Headbutt,H,S002a002a
+SUCCESS:4
+HINT:Charge DB -> QCF->DB+MK for the first tackle. Second tackle can land if screen shakes up
+---

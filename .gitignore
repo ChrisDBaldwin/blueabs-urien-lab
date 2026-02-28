@@ -1,0 +1,14 @@
+# Reference scripts (prior art, not part of this project)
+reference/
+
+# Claude Code local settings
+.claude/
+
+# Save states (binary, user-specific)
+*.fs
+
+# User data files (progression, captures, character metadata)
+urien_lab_save.txt
+urien_lab_characters.txt
+urien_lab_matchups.txt
+captured_drills.txt
