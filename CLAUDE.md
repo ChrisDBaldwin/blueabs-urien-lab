@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Blueabs Urien Lab** is a Lua training script for **Street Fighter III: 3rd Strike** running on **FBNeo (FinalBurn Neo)** emulator. It teaches Urien combos progressively through a curriculum-driven drill system — from basic normals through tackle loops to advanced Aegis Reflector unblockable setups.
+**Blueabs Urien Lab** is a Lua training script for **Street Fighter III: 3rd Strike** running on **FBNeo (FinalBurn Neo)** emulator. It teaches Urien combos progressively through a curriculum-driven exercise system — from basic normals through tackle loops to advanced Aegis Reflector unblockable setups.
 
 ### Flow
 
@@ -12,8 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **Start** toggles the overlay — hide it to play, show it to save/load
 3. **Fierce** saves the current match state for the selected opponent
 4. **Jab** loads a saved state → transitions to training mode
-5. **Start** opens the drill menu to select which combo to practice
-6. Drill engine manages setup, detection, and progression
+5. **Start** opens the exercise menu to select which combo to practice
+6. Exercise engine manages setup, detection, and progression
 
 ## Running the Script
 
@@ -21,35 +21,35 @@ Load `urien_lab.lua` via FBNeo's Lua console (`Game > Lua Scripting`). The ROM m
 
 ## Architecture
 
-### Main File: `urien_lab.lua` (~2800 lines)
+### Main File: `urien_lab.lua` (~3000 lines)
 
 Two-level state machine:
 - **App level:** `APP_CHARSELECT` ↔ `APP_TRAINING` — controls whether the character select grid or the training HUD is shown
-- **Drill level:** `IDLE` → `SETUP` → `ACTIVE` → `SUCCESS`/`FAIL` — manages individual drill execution
+- **Exercise level:** `IDLE` → `SETUP` → `ACTIVE` → `SUCCESS`/`FAIL` — manages individual exercise execution
 
 Organized into numbered sections:
 
 | Section | Purpose |
 |---------|---------|
-| [1] Constants | Screen dims (384×224), timing, colors, drill/app state enums |
+| [1] Constants | Screen dims (384×224), timing, colors, exercise/app state enums, category constants |
 | [2] Memory Map | CPS3 RAM addresses (game phase, P1/P2 base, charge, meter, combos) |
 | [2b] Character Roster | 19 SF3:3S characters (alphabetical, no Gill), grid layout constants, app state vars |
 | [3] Move Database | Urien moves with action IDs, dual notation (SF + Numpad) |
-| [4] Drill Definitions | Tier-organized drills with sequences, setup requirements, success/fail criteria, hints |
+| [4] Exercise Definitions | Exercises loaded from file with sequences, setup requirements, success/fail criteria, hints |
 | [5] Progression | Save/load to `urien_lab_save.txt`, mastery tracking (3 completions) |
 | [6] Utilities | Memory reads (little-endian), action string builders, action ID normalization |
 | [7] Game State Reader | Per-frame polling of positions, actions, combo counter, hit region, meter |
 | [8] Dummy Controller | P2 position/life/meter/stun management, input locking, delayed HP recovery |
-| [9] Drill Engine | State machine: SETUP → ACTIVE → SUCCESS/FAIL, combo detection, timeout |
+| [9] Exercise Engine | State machine: SETUP → ACTIVE → SUCCESS/FAIL, combo detection, timeout |
 | [10] Input Display | Toggleable SF/Numpad notation |
 | [11a] Matchup States | Legacy 5-slot save state system (slots 8001–8005) |
 | [11a2] Character States | Named save files (`vs_CharName.fs`), metadata in `urien_lab_characters.txt`, auto-load on startup |
-| [11b] HUD & Menu | Character select grid, two-tab drill menu (Drills / Opponent), result banners |
-| [11c] Drill Capture | Records combos to `captured_drills.txt` in Lua table format |
+| [11b] HUD & Menu | Character select grid, three-tab exercise menu (All / Character / Opponent), result banners |
+| [11c] Exercise Capture | Records combos to `captured_exercises.txt` in Lua table format |
 | [11c2] Input Notation Detector | Converts joypad input logs to human-readable notation (numpad, SF format) |
-| [11c3] Drill Builder | Record-to-Drill — converts captured combos into playable drill definitions |
-| [11c4] Custom Drill Persistence | Save/load custom drills to `urien_lab_custom_drills.txt` |
-| [12] Controls | Input handlers: charselect navigation, menu nav, drill selection |
+| [11c3] Exercise Builder | Record-to-Exercise — converts captured combos into playable exercise definitions |
+| [11c4] Exercise Persistence | Save/load exercises to `urien_lab_exercises.txt` |
+| [12] Controls | Input handlers: charselect navigation, menu nav, exercise selection |
 | [13] Hooks | FBNeo callbacks, hotkeys, file migration, initialization |
 
 ## Key Technical Details
@@ -68,7 +68,7 @@ Organized into numbered sections:
 Action strings are built by `build_action_string()` as `prefix + sub(4hex) + id(4hex)`:
 - Prefixes: `A` (attack/normal), `S` (special), `F` (projectile, 5-char format: `F` + id(4hex)), `G` (guard), `T` (throw), `M` (misc), `N` (neutral)
 - The game sets a `0x2000` flag on `action_id` during connected hits. `build_action_string()` strips this with `action_id % 0x2000` so IDs always match the clean values in the MOVES database.
-- `normalize_action_string()` strips the same flag from stored strings (for backward compatibility with custom drill files saved before normalization was added).
+- `normalize_action_string()` strips the same flag from stored strings (for backward compatibility with exercise files saved before normalization was added).
 
 ### Critical Memory Addresses
 - Game phase: `0x020154A6` (word, 2 = playing)
@@ -83,7 +83,7 @@ Action strings are built by `build_action_string()` as `prefix + sub(4hex) + id(
 - P1 character ID: `0x02011387` (byte, Urien = 14)
 
 ### Always-On Training Resources (in `gui.register`)
-These run every frame when the game is playing, regardless of drill state:
+These run every frame when the game is playing, regardless of exercise state:
 - **Round timer** — frozen at 99
 - **Super meter** — always full
 - **Stun** — always cleared (both players)
@@ -93,12 +93,13 @@ These run every frame when the game is playing, regardless of drill state:
 ### Combo Detection
 1. Monitor combo counter at `0x020696C5`
 2. Sum hit region `0x02011000–0x020110C8` for waza total
-3. When either increases, compare P1's action string against the expected move in the drill sequence
-4. Combo counter drop (>0 → 0) triggers FAIL, unless `drill.allow_combo_reset` is set (for multi-combo Aegis setups)
+3. When either increases, compare P1's action string against the expected move in the exercise sequence
+4. Combo counter drop (>0 → 0) triggers FAIL, unless `exercise.allow_combo_reset` is set (for multi-combo Aegis setups)
 
-### Drill Definition Format
+### Exercise Definition Format
 ```lua
 { id = "t1_03", name = "cr.HP xx L.Tackle",
+  category = "combo",
   sequence = {
       { name = "cr.HP",    hit_type = "H", action_ids = {"A00180018"} },
       { name = "L.Tackle", hit_type = "H", action_ids = {"S003a003a"} },
@@ -112,26 +113,33 @@ These run every frame when the game is playing, regardless of drill state:
   difficulty = 2 }
 ```
 
-Custom drills have additional fields: `custom = true`, `tier = 0`, and optionally `allow_combo_reset = true` for multi-combo sequences.
+Exercises support these optional fields: `allow_combo_reset = true` for multi-combo sequences, `characters = {"Ken", "Yun"}` to restrict the exercise to specific opponents (no tag = universal, shows for all), and `category` (one of: `"combo"`, `"unblockable"`, `"sequence"`, `"parry"`; defaults to `"combo"`).
 
-### Multi-Combo Drills (Aegis Setups)
-Drills with `allow_combo_reset = true` tolerate the combo counter resetting to 0 mid-sequence. The drill builder auto-sets this flag when it filters out N/M/G/T-prefix entries (neutral/misc state transitions that appear during combo resets). Persisted as `RESETOK:1` in the custom drill file.
+### Exercise Categories
+Exercises are organized into categories that appear as group headers in the menu:
+- **combo** — true combos
+- **unblockable** — Aegis Reflector unblockable setups
+- **sequence** — strong routes that aren't true unblockables but worth mapping
+- **parry** — parry exercises
 
-### Record-to-Drill Flow
-1. Press **Coin** during a match to start recording (pauses any active drill)
+### Multi-Combo Exercises (Aegis Setups)
+Exercises with `allow_combo_reset = true` tolerate the combo counter resetting to 0 mid-sequence. The exercise builder auto-sets this flag when it filters out N/M/G/T-prefix entries (neutral/misc state transitions that appear during combo resets). Persisted as `RESETOK:1` in the exercise file.
+
+### Record-to-Exercise Flow
+1. Press **Coin** during a match to start recording (pauses any active exercise)
 2. Perform a combo — the capture system records hits and joypad inputs each frame
-3. Press **Coin** again to stop — the system automatically builds a playable drill:
+3. Press **Coin** again to stop — the system automatically builds a playable exercise:
    - Known moves are identified via `lookup_move_name()` against the MOVES database
    - Unknown moves get notation inferred from joypad edge detection (`detect_motion` + `detect_button`)
    - Multi-hit moves (e.g., Tyrant Slaughter) are collapsed into a single sequence step
    - N/M/G/T-prefix entries are filtered out (state transitions, not player moves)
-4. The new drill appears at the bottom of the drill menu with a `[C]` prefix in cyan
-5. Custom drills persist to `urien_lab_custom_drills.txt` and reload on script restart
-6. To rename a custom drill, edit the `NAME:` line in `urien_lab_custom_drills.txt` and press **Alt+9** to reload
-7. Delete custom drills: highlight in menu, press Fierce twice to confirm
+4. The new exercise appears in the exercise menu under the COMBO category
+5. Exercises persist to `urien_lab_exercises.txt` and reload on script restart
+6. To rename an exercise, edit the `NAME:` line in `urien_lab_exercises.txt` and press **Alt+9** to reload
+7. Delete exercises: highlight in menu, press Fierce twice to confirm
 
-### Custom Drill File Format
-Line-oriented key:value blocks in `urien_lab_custom_drills.txt`:
+### Exercise File Format
+Line-oriented key:value blocks in `urien_lab_exercises.txt`:
 ```
 ---
 ID:c_01
@@ -139,6 +147,8 @@ NAME:cr.HP > L.Tackle
 NOTATION_SF:d+HP, b~f+LK
 NOTATION_NP:2HP, [4]6LK
 DIFFICULTY:2
+CATEGORY:combo
+CHARS:Ken,Yun
 SETUP:0100,0180,A0,A0,full,1,0,stand,0
 SEQ:cr.HP,H,A00180018|L.Tackle,H,S003a003a
 SUCCESS:2
@@ -156,12 +166,12 @@ Save states use named files (`vs_CharName.fs`) stored next to the script. A temp
 | File | Tracked | Purpose |
 |------|---------|---------|
 | `urien_lab.lua` | Yes | Main script |
-| `urien_lab_custom_drills.txt` | Yes | Curated drill curriculum (the shipped content) |
+| `urien_lab_exercises.txt` | Yes | Exercise definitions (the shipped content) |
 | `CLAUDE.md` | Yes | Dev guidance |
 | `README.md` | Yes | User-facing docs |
 | `urien_lab_save.txt` | No | User progression (completions, attempts, mastery) |
 | `urien_lab_characters.txt` | No | Character save state metadata |
-| `captured_drills.txt` | No | Raw capture logs |
+| `captured_exercises.txt` | No | Raw capture logs |
 | `vs_*.fs` | No | Binary FBNeo save states (user-specific, ROM-dependent) |
 | `reference/` | No | Prior art scripts (gitignored) |
 
@@ -174,19 +184,20 @@ Save states use named files (`vs_CharName.fs`) stored next to the script. A temp
 - **Fierce (P1 Strong Punch)** — Save current game state for selected opponent
 
 ### Training Mode
-- **Start** — Open/close drill menu
-- **Left/Right** — Switch tabs (Drills / Opponent)
-- **Up/Down** — Navigate drills
-- **Jab (P1 Weak Punch)** — Select drill / Change opponent (in Opponent tab)
+- **Start** — Open/close exercise menu
+- **Left/Right** — Switch tabs (All / Character / Opponent)
+- **Up/Down** — Navigate exercises
+- **Jab (P1 Weak Punch)** — Select exercise / Change opponent (in Opponent tab)
 - **Strong (P1 Medium Punch)** — Back / Close menu
-- **Fierce (P1 Strong Punch)** — Delete custom drill (in Drills tab, press twice to confirm)
-- **Weak Kick** — Toggle drill side (L/R)
-- **Coin** — Toggle record-to-drill capture (records combo → creates playable drill)
+- **Fierce (P1 Strong Punch)** — Delete exercise (press twice to confirm)
+- **Weak Kick** — Toggle exercise side (L/R)
+- **Medium Kick** — Toggle current opponent tag on highlighted exercise
+- **Coin** — Toggle record-to-exercise capture (records combo → creates playable exercise)
 - **Alt+2** — Toggle numpad notation
-- **Alt+3** — Reset current drill progress
+- **Alt+3** — Reset current exercise progress
 - **Alt+4** — Toggle debug display
 - **Alt+5** — Toggle menu (reliable backup for Start)
-- **Alt+9** — Reload custom drills (after editing `urien_lab_custom_drills.txt`)
+- **Alt+9** — Reload exercises (after editing `urien_lab_exercises.txt`)
 
 ## Conventions
 - All colors are RRGGBBAA 32-bit hex (FBNeo convention, e.g. `0xFF0000FF` = red, full opacity)
