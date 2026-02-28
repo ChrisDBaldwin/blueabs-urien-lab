@@ -2,13 +2,14 @@
 -- BLUEABS URIEN LAB: Training Mode for SF3:3rd Strike on FBNeo
 -- ============================================================================
 -- A curriculum-based training script that takes you from "knows the moves"
--- to confident Urien pilot. Data-driven drill system with structured tiers.
+-- to confident Urien pilot. Data-driven exercise system with structured categories.
 --
 -- Flow:
---   1. Script loads -> character select grid appears
---   2. Pick an opponent (Jab=load saved state, Fierce=save current state)
---   3. In training mode, press Start to open drill menu
+--   1. Script loads -> game's native character select screen (if character_select.fs exists)
+--   2. Pick P1 and P2 characters, both lock in -> fast-forwards to match
+--   3. In training mode, press Start to open exercise menu
 --   4. Select a combo to practice
+--   Alt+1 = Return to character select at any time
 --
 -- Character Select Controls:
 --   D-Pad        = Navigate character grid
@@ -16,15 +17,16 @@
 --   Fierce (P1 Strong Punch) = Save current game state for opponent
 --
 -- Training Controls:
---   Start        = Open/close drill menu
---   Left/Right   = Switch menu tabs (Drills / Opponent)
---   Up/Down      = Navigate drills
---   Jab (P1 Weak Punch)      = Select drill
---   Strong (P1 Medium Punch)  = Stop drill (in menu) / Close menu
---   LK (P1 Weak Kick)         = Toggle drill side (L/R)
---   Coin         = Toggle drill capture mode
+--   Start        = Open/close exercise menu
+--   Left/Right   = Switch menu tabs (Exercises / Opponent)
+--   Up/Down      = Navigate exercises
+--   Jab (P1 Weak Punch)      = Select exercise
+--   Strong (P1 Medium Punch)  = Stop exercise (in menu) / Close menu
+--   LK (P1 Weak Kick)         = Toggle exercise side (L/R)
+--   MK (P1 Medium Kick)       = Tag/untag opponent on exercise
+--   Coin         = Toggle exercise capture mode
 --   Alt+2        = Toggle numpad notation
---   Alt+3        = Reset current drill progress
+--   Alt+3        = Reset current exercise progress
 --   Alt+5        = Toggle menu (reliable backup for Start)
 -- ============================================================================
 
@@ -32,9 +34,9 @@
 -- [1] CONSTANTS & CONFIG
 -- ============================================================================
 
-local SCRIPT_VERSION = "0.3.0"
+local SCRIPT_VERSION = "0.4.0"
 local SAVE_FILE = "urien_lab_save.txt"
-local CAPTURE_FILE = "captured_drills.txt"
+local CAPTURE_FILE = "captured_exercises.txt"
 local MATCHUP_FILE = "urien_lab_matchups.txt"
 
 -- Screen dimensions (CPS3 = 384x224)
@@ -42,7 +44,7 @@ local SCREEN_W = 384
 local SCREEN_H = 224
 
 -- Timing
-local SETUP_DELAY_FRAMES = 30       -- Pause after positioning before drill goes active
+local SETUP_DELAY_FRAMES = 30       -- Pause after positioning before exercise goes active
 local SUCCESS_DISPLAY_FRAMES = 120   -- Show "CLEAR!" for 2 seconds
 local FAIL_DISPLAY_FRAMES = 90       -- Show failure for 1.5 seconds
 
@@ -52,7 +54,7 @@ local LIFE_RECOVERY_SPEED = 8        -- HP units per frame during recovery
 local LIFE_FULL = 0xA0               -- Full HP value
 
 -- Mastery
-local MASTERY_THRESHOLD = 3          -- Completions needed to master a drill
+local MASTERY_THRESHOLD = 3          -- Completions needed to master an exercise
 
 -- Matchup save state slots
 local MAX_MATCHUP_SLOTS = 5
@@ -62,9 +64,31 @@ local MATCHUP_SLOT_BASE = 8000       -- FBNeo savestate slot numbers start here
 local CHAR_SAVE_FILE = "urien_lab_characters.txt"
 local CHAR_SLOT_BASE = 9000          -- FBNeo savestate slots 9001+
 
--- Custom drills (record-to-drill)
-local CUSTOM_DRILL_FILE = "urien_lab_custom_drills.txt"
-local custom_drill_counter = 0
+-- Character select save state (game's native char select screen)
+local CHARSELECT_SAVE = "character_select.fs"
+
+-- Character select sequence states
+local CHARSELECT_NONE          = 0  -- Not in character select sequence
+local CHARSELECT_SELECTING     = 1  -- At char select screen, timer frozen
+local CHARSELECT_TRANSITIONING = 2  -- Both locked, fast-forwarding to match
+
+-- Exercises (record-to-exercise)
+local EXERCISE_FILE = "urien_lab_exercises.txt"
+local CUSTOM_EXERCISE_FILE = "urien_lab_custom.txt"
+local exercise_counter = 0
+
+-- Update & distribution URLs
+local GITHUB_RAW_URL  = "https://raw.githubusercontent.com/ChrisDBaldwin/blueabs-urien-lab/main/"
+local SAVES_BASE_URL  = "https://voidtalker.com/urien-lab/"
+
+-- Exercise categories (display order)
+local EXERCISE_CATEGORIES = {"combo", "unblockable", "sequence", "parry"}
+local CATEGORY_LABELS = {
+    combo = "COMBO",
+    unblockable = "UNBLOCKABLE",
+    sequence = "SEQUENCE",
+    parry = "PARRY",
+}
 
 -- Corner detection
 local STAGE_LEFT = 0x0040
@@ -101,7 +125,7 @@ local COLOR = {
 local NOTATION_SF = 1
 local NOTATION_NUMPAD = 2
 
--- Drill engine states
+-- Exercise engine states
 local STATE_IDLE    = "idle"
 local STATE_SETUP   = "setup"
 local STATE_ACTIVE  = "active"
@@ -115,6 +139,88 @@ local APP_TRAINING   = "training"
 
 -- Max objects for projectile scan
 local MAX_GAME_OBJECTS = 30
+
+-- ============================================================================
+-- [1b] UPDATE & DISTRIBUTION
+-- ============================================================================
+
+--- Detect platform: "windows" or "unix"
+local function detect_platform()
+    if package.config:sub(1,1) == "\\" then
+        return "windows"
+    end
+    return "unix"
+end
+
+--- Download a file from url to dest. Returns true on success.
+local function download_file(url, dest)
+    local platform = detect_platform()
+    local null_redirect = platform == "windows" and " 2>nul" or " 2>/dev/null"
+    -- Primary: curl
+    local cmd = 'curl -sfL --connect-timeout 2 --max-time 10 -o "' .. dest .. '" "' .. url .. '"' .. null_redirect
+    local result = os.execute(cmd)
+    -- os.execute returns 0 (Lua 5.1) or true (Lua 5.2+) on success
+    if result == 0 or result == true then return true end
+    -- Windows fallback: PowerShell
+    if platform == "windows" then
+        cmd = 'powershell -NoProfile -Command "(New-Object Net.WebClient).DownloadFile(\'' .. url .. '\',\'' .. dest .. '\')"' .. null_redirect
+        result = os.execute(cmd)
+        if result == 0 or result == true then return true end
+    end
+    return false
+end
+
+--- Parse "X.Y.Z" version string into a comparable number (major*10000 + minor*100 + patch)
+local function parse_version(str)
+    if not str then return 0 end
+    local major, minor, patch = str:match("^(%d+)%.(%d+)%.(%d+)")
+    if not major then return 0 end
+    return tonumber(major) * 10000 + tonumber(minor) * 100 + tonumber(patch)
+end
+
+--- Check GitHub for a newer version of the script. Called once at boot.
+local function check_for_updates()
+    local tmp_file = "urien_lab.lua.tmp"
+    if not download_file(GITHUB_RAW_URL .. "urien_lab.lua", tmp_file) then
+        os.remove(tmp_file)
+        return
+    end
+    -- Read remote version from first 100 lines
+    local f = io.open(tmp_file, "r")
+    if not f then os.remove(tmp_file) return end
+    local remote_version = nil
+    for i = 1, 100 do
+        local line = f:read("*l")
+        if not line then break end
+        local ver = line:match('^local SCRIPT_VERSION%s*=%s*"([%d%.]+)"')
+        if ver then
+            remote_version = ver
+            break
+        end
+    end
+    f:close()
+    local remote_num = parse_version(remote_version)
+    local local_num = parse_version(SCRIPT_VERSION)
+    if remote_num > local_num then
+        -- Replace script with newer version
+        os.remove("urien_lab.lua")
+        os.rename(tmp_file, "urien_lab.lua")
+        -- Also update shipped exercises
+        download_file(GITHUB_RAW_URL .. "urien_lab_exercises.txt", EXERCISE_FILE)
+        print("[Urien Lab] Updated to v" .. remote_version .. " -- reload script to apply")
+    else
+        os.remove(tmp_file)
+    end
+end
+
+--- Download a single .fs save state from voidtalker. Returns true on success.
+local function fetch_save_state(filename)
+    if download_file(SAVES_BASE_URL .. filename, filename) then
+        print("[Urien Lab] Downloaded save state: " .. filename)
+        return true
+    end
+    return false
+end
 
 -- ============================================================================
 -- [2] MEMORY ADDRESS MAP
@@ -173,6 +279,11 @@ local MEM = {
 
     -- Character select
     p1_char_id      = 0x02011387,  -- byte (Urien = 14)
+
+    -- Character select screen (game's native menu)
+    char_select_timer = 0x020154FB,  -- byte: freeze to prevent timeout
+    p1_locked         = 0x020154C6,  -- byte: 0xFF = character locked in
+    p2_locked         = 0x020154C8,  -- byte: 0xFF = character locked in
 }
 
 -- Charge gauge offsets (from charge_base)
@@ -214,6 +325,10 @@ local char_cursor = 1
 local selected_opponent = nil   -- reference to CHARACTERS entry
 local char_states = {}          -- { [char_id] = { saved = bool } }
 local pending_home_load = true  -- auto-load first available save on startup
+local charselect_seq = CHARSELECT_NONE  -- game character select sequence state
+local all_exercises_sorted = {}    -- indices into exercises[], category-sorted, no opponent filter
+local filtered_exercises = {}      -- indices into exercises[] for current opponent (tagged + untagged)
+local filter_active = false     -- true when filtering by opponent
 
 -- Temp slot used for all save/load operations (file gets renamed to descriptive name)
 local TEMP_SLOT = 99999
@@ -291,37 +406,37 @@ local MOVES = {
 }
 
 -- ============================================================================
--- [4] DRILL DEFINITIONS (Tier 1)
+-- [4] EXERCISE DEFINITIONS
 -- ============================================================================
 
-local drills = {}
--- Custom drills populated via record-to-drill (Coin) and loaded from urien_lab_custom_drills.txt
+local exercises = {}
+-- Exercises populated via record-to-exercise (Coin) and loaded from urien_lab_exercises.txt
 
 -- ============================================================================
 -- [5] PROGRESSION STATE
 -- ============================================================================
 
-local progression = {}  -- { [drill_id] = { completions = N, attempts = N, mastered = bool } }
+local progression = {}  -- { [exercise_id] = { completions = N, attempts = N, mastered = bool } }
 local current_streak = 0
 local best_streak = 0
-local drill_sides = {}  -- { [drill_id] = "L" or "R" }
+local exercise_sides = {}  -- { [exercise_id] = "L" or "R" }
 
-local function get_drill_side(drill_id)
-    return drill_sides[drill_id] or "L"
+local function get_exercise_side(exercise_id)
+    return exercise_sides[exercise_id] or "L"
 end
 
-local function toggle_drill_side(drill_id)
-    if drill_sides[drill_id] == "R" then
-        drill_sides[drill_id] = "L"
+local function toggle_exercise_side(exercise_id)
+    if exercise_sides[exercise_id] == "R" then
+        exercise_sides[exercise_id] = "L"
     else
-        drill_sides[drill_id] = "R"
+        exercise_sides[exercise_id] = "R"
     end
 end
 
 local function init_progression()
-    for _, drill in ipairs(drills) do
-        if not progression[drill.id] then
-            progression[drill.id] = {
+    for _, exercise in ipairs(exercises) do
+        if not progression[exercise.id] then
+            progression[exercise.id] = {
                 completions = 0,
                 attempts = 0,
                 mastered = false,
@@ -336,7 +451,7 @@ local function save_progression()
     f:write("-- Urien Lab Save Data\n")
     f:write("-- Version: " .. SCRIPT_VERSION .. "\n")
     for id, data in pairs(progression) do
-        local side = drill_sides[id] or "L"
+        local side = exercise_sides[id] or "L"
         f:write(string.format("%s,%d,%d,%s,%s\n",
             id, data.completions, data.attempts,
             data.mastered and "1" or "0", side))
@@ -360,13 +475,13 @@ local function load_progression()
                     mastered = (mast == "1"),
                 }
                 if side == "R" then
-                    drill_sides[id] = "R"
+                    exercise_sides[id] = "R"
                 end
             end
         end
     end
     f:close()
-    init_progression()  -- fill in any new drills not in save file
+    init_progression()  -- fill in any new exercises not in save file
 end
 
 -- ============================================================================
@@ -627,9 +742,9 @@ local function reset_hit_tracking()
     game_state.combo_counter_prev = 0
 end
 
-local function apply_drill_setup(drill)
-    local setup = drill.setup
-    local side = get_drill_side(drill.id)
+local function apply_exercise_setup(exercise)
+    local setup = exercise.setup
+    local side = get_exercise_side(exercise.id)
     local p1_x = setup.p1_x
     local p2_x = setup.p2_x
     if side == "R" then
@@ -669,14 +784,14 @@ reset_stun = function()
     memory.writebyte(MEM.p1_stun_timer, 0x00)
 end
 
-local function manage_resources(drill)
-    if not drill then return end
-    local setup = drill.setup
+local function manage_resources(exercise)
+    if not exercise then return end
+    local setup = exercise.setup
 
     -- Always keep stun clear
     reset_stun()
 
-    -- Always keep meter full (needed for EX/super drills)
+    -- Always keep meter full (needed for EX/super exercises)
     if setup.meter == "full" then
         fill_meter_full()
     end
@@ -712,13 +827,13 @@ local function manage_resources(drill)
 end
 
 -- ============================================================================
--- [9] DRILL ENGINE (state machine)
+-- [9] EXERCISE ENGINE (state machine)
 -- ============================================================================
 
 local engine = {
     state = STATE_IDLE,
-    current_drill = nil,       -- reference to drill table
-    current_drill_index = 1,   -- index in drills array
+    current_exercise = nil,       -- reference to exercise table
+    current_exercise_index = 1,   -- index in exercises array
     combo_index = 1,           -- current step in sequence (1-based)
     setup_timer = 0,
     result_timer = 0,
@@ -732,7 +847,7 @@ local engine = {
     session_completions = 0,
 }
 
--- Combo tracker: live display of moves as they land (independent of drill engine)
+-- Combo tracker: live display of moves as they land (independent of exercise engine)
 local combo_tracker = {
     moves = {},            -- array of move name strings
     display_string = "",   -- pre-built display text
@@ -788,10 +903,10 @@ local function scan_projectile_hits(expected_ids)
     return nil
 end
 
-local function select_drill(index)
-    index = clamp(index, 1, #drills)
-    engine.current_drill_index = index
-    engine.current_drill = drills[index]
+local function select_exercise(index)
+    index = clamp(index, 1, #exercises)
+    engine.current_exercise_index = index
+    engine.current_exercise = exercises[index]
     engine.state = STATE_SETUP
     engine.combo_index = 1
     engine.setup_timer = SETUP_DELAY_FRAMES
@@ -803,8 +918,8 @@ local function select_drill(index)
     engine.session_completions = 0
 end
 
-local function reset_drill()
-    if not engine.current_drill then return end
+local function reset_exercise()
+    if not engine.current_exercise then return end
     engine.state = STATE_SETUP
     engine.combo_index = 1
     engine.setup_timer = SETUP_DELAY_FRAMES
@@ -816,12 +931,12 @@ end
 
 local function engine_setup_update()
     if not game_state.playing then return end
-    if not engine.current_drill then
+    if not engine.current_exercise then
         engine.state = STATE_IDLE
         return
     end
 
-    apply_drill_setup(engine.current_drill)
+    apply_exercise_setup(engine.current_exercise)
 
     engine.setup_timer = engine.setup_timer - 1
     if engine.setup_timer <= 0 then
@@ -832,16 +947,16 @@ end
 
 local function engine_active_update()
     if not game_state.playing then return end
-    if not engine.current_drill then
+    if not engine.current_exercise then
         engine.state = STATE_IDLE
         return
     end
 
-    local drill = engine.current_drill
-    local seq = drill.sequence
+    local ex = engine.current_exercise
+    local seq = ex.sequence
 
     -- Manage HP/stun/meter/charge with delayed recovery
-    manage_resources(drill)
+    manage_resources(ex)
 
     -- Current step we're looking for
     if engine.combo_index > #seq then
@@ -852,8 +967,8 @@ local function engine_active_update()
     local current_step = seq[engine.combo_index]
 
     -- Check for combo drops: if combo counter was > 0 and resets to 0, and we haven't
-    -- finished the sequence, that's a drop (skip for multi-combo drills like Aegis setups)
-    if not drill.allow_combo_reset and engine.combo_index > 1 and game_state.combo_counter == 0 and game_state.combo_counter_prev > 0 then
+    -- finished the sequence, that's a drop (skip for multi-combo exercises like Aegis setups)
+    if not ex.allow_combo_reset and engine.combo_index > 1 and game_state.combo_counter == 0 and game_state.combo_counter_prev > 0 then
         engine.state = STATE_FAIL
         engine.fail_reason = "Combo dropped at: " .. current_step.name
         engine.result_timer = FAIL_DISPLAY_FRAMES
@@ -868,7 +983,7 @@ local function engine_active_update()
             if engine.combo_index == 2 and not engine.attempt_started then
                 engine.attempt_started = true
                 engine.session_attempts = engine.session_attempts + 1
-                local prog = progression[drill.id]
+                local prog = progression[ex.id]
                 if prog then prog.attempts = prog.attempts + 1 end
             end
         end
@@ -893,7 +1008,7 @@ local function engine_active_update()
                     if engine.combo_index == 2 and not engine.attempt_started then
                         engine.attempt_started = true
                         engine.session_attempts = engine.session_attempts + 1
-                        local prog = progression[drill.id]
+                        local prog = progression[ex.id]
                         if prog then prog.attempts = prog.attempts + 1 end
                     end
                     break
@@ -905,7 +1020,7 @@ local function engine_active_update()
     -- Check if all steps completed
     if engine.combo_index > #seq then
         -- Verify minimum combo count if specified
-        local min_combo = drill.success.min_combo or #seq
+        local min_combo = ex.success.min_combo or #seq
         -- For multi-hit sequences with projectiles, combo counter might not match exactly
         -- so we consider completion of all steps as success
         engine.state = STATE_SUCCESS
@@ -917,7 +1032,7 @@ local function engine_active_update()
         end
 
         -- Update progression
-        local prog = progression[drill.id]
+        local prog = progression[ex.id]
         if prog then
             prog.completions = prog.completions + 1
             if prog.completions >= MASTERY_THRESHOLD then
@@ -934,7 +1049,7 @@ local function engine_result_update()
         if engine.state == STATE_FAIL then
             current_streak = 0
         end
-        reset_drill()
+        reset_exercise()
     end
 end
 
@@ -946,13 +1061,13 @@ local function engine_update()
     elseif engine.state == STATE_SUCCESS or engine.state == STATE_FAIL then
         engine_result_update()
         -- Keep resources managed during result display
-        if game_state.playing and engine.current_drill then
-            manage_resources(engine.current_drill)
+        if game_state.playing and engine.current_exercise then
+            manage_resources(engine.current_exercise)
         end
     end
 end
 
---- Combo tracker update: runs every frame, independent of drill engine and capture
+--- Combo tracker update: runs every frame, independent of exercise engine and capture
 local function combo_tracker_update()
     if not game_state.playing then return end
 
@@ -1025,11 +1140,11 @@ end
 
 local notation_mode = NOTATION_SF
 
-local function get_notation(drill)
+local function get_notation(exercise)
     if notation_mode == NOTATION_NUMPAD then
-        return drill.numpad
+        return exercise.numpad
     else
-        return drill.notation
+        return exercise.notation
     end
 end
 
@@ -1121,6 +1236,37 @@ local function file_exists(path)
     return false
 end
 
+--- Load the character select save state
+local function load_charselect_save()
+    if not file_exists(CHARSELECT_SAVE) then
+        -- Try downloading from server
+        if not fetch_save_state(CHARSELECT_SAVE) then
+            print("[Urien Lab] No character select save found: " .. CHARSELECT_SAVE)
+            return false
+        end
+    end
+    local temp = tostring(TEMP_SLOT)
+    os.remove(temp)
+    if not os.rename(CHARSELECT_SAVE, temp) then
+        print("[Urien Lab] Could not access: " .. CHARSELECT_SAVE)
+        return false
+    end
+    local state = savestate.create(TEMP_SLOT)
+    savestate.load(state)
+    os.rename(temp, CHARSELECT_SAVE)
+    return true
+end
+
+--- Start the game character select sequence
+local function start_character_select()
+    if not load_charselect_save() then return false end
+    charselect_seq = CHARSELECT_SELECTING
+    app_state = APP_CHARSELECT
+    charselect_visible = false  -- hide script overlay, show game's native screen
+    print("[Urien Lab] Character select -- pick your fighters!")
+    return true
+end
+
 --- Migrate old numbered save files to named format (vs_CharName.fs)
 local function migrate_legacy_saves()
     local migrated = 0
@@ -1194,6 +1340,9 @@ local function load_char_metadata()
     end
 end
 
+-- Forward declaration (defined in [11b], needed by load_char_state below)
+local rebuild_filtered_exercises
+
 local function save_char_state(char_index)
     local char = CHARACTERS[char_index]
     if not char then return false end
@@ -1214,11 +1363,20 @@ end
 local function load_char_state(char_index)
     local char = CHARACTERS[char_index]
     if not char then return false end
+    local path = char_save_path(char)
+    -- Try downloading if file doesn't exist locally
+    if not file_exists(path) then
+        if fetch_save_state("vs_" .. char.name .. ".fs") then
+            char_states[char.id] = { saved = true }
+        else
+            print("[Urien Lab] No save state for vs " .. char.name)
+            return false
+        end
+    end
     if not char_states[char.id] or not char_states[char.id].saved then
         print("[Urien Lab] No save state for vs " .. char.name)
         return false
     end
-    local path = char_save_path(char)
     local temp = tostring(TEMP_SLOT)
     -- Rename named file to temp slot, load, then rename back
     os.remove(temp)
@@ -1232,6 +1390,7 @@ local function load_char_state(char_index)
     -- Immediately freeze round timer so it doesn't tick after loading
     memory.writebyte(MEM.round_timer, 100)
     selected_opponent = char
+    rebuild_filtered_exercises()
     print("[Urien Lab] Loaded state: " .. path)
     return true
 end
@@ -1258,17 +1417,82 @@ end
 -- ============================================================================
 
 -- Menu modes
-local MENU_DRILLS = 1
-local MENU_OPPONENT = 2
+local MENU_ALL_EXERCISES = 1   -- All exercises (unfiltered)
+local MENU_CHAR_EXERCISES = 2  -- Character-filtered exercises
+local MENU_OPPONENT = 3
 
 local show_menu = false
-local menu_cursor = 1
-local menu_mode = MENU_DRILLS
+local menu_cursor_all = 1       -- cursor for All tab
+local menu_cursor_char = 1      -- cursor for Character tab
+local menu_mode = MENU_ALL_EXERCISES
 local matchup_cursor = 1
 local naming_slot = nil       -- set to slot number when naming a matchup
 local naming_buffer = ""
 local show_debug = false
-local delete_confirm_id = nil -- drill ID pending delete confirmation
+local delete_confirm_id = nil -- exercise ID pending delete confirmation
+
+--- Rebuild both exercise index lists (all + character-filtered)
+--- Sorts by category order (combo → unblockable → sequence → parry)
+rebuild_filtered_exercises = function()
+    filtered_exercises = {}
+    all_exercises_sorted = {}
+    filter_active = (selected_opponent ~= nil)
+
+    -- Build category priority lookup
+    local cat_order = {}
+    for i, cat in ipairs(EXERCISE_CATEGORIES) do
+        cat_order[cat] = i
+    end
+
+    local cat_sort = function(a, b)
+        local cat_a = exercises[a].category or "combo"
+        local cat_b = exercises[b].category or "combo"
+        local order_a = cat_order[cat_a] or 99
+        local order_b = cat_order[cat_b] or 99
+        if order_a ~= order_b then
+            return order_a < order_b
+        end
+        return a < b
+    end
+
+    -- Build all-exercises list (unfiltered, category-sorted)
+    local all = {}
+    for i = 1, #exercises do
+        table.insert(all, i)
+    end
+    table.sort(all, cat_sort)
+    all_exercises_sorted = all
+
+    -- Build character-filtered list
+    local matching = {}
+    for i, exercise in ipairs(exercises) do
+        local dominated = false
+        if filter_active then
+            if exercise.characters and #exercise.characters > 0 then
+                dominated = true
+                for _, char_name in ipairs(exercise.characters) do
+                    if char_name == selected_opponent.name then
+                        dominated = false
+                        break
+                    end
+                end
+            end
+        end
+        if not dominated then
+            table.insert(matching, i)
+        end
+    end
+    table.sort(matching, cat_sort)
+    filtered_exercises = matching
+
+    -- Clamp cursors
+    if menu_cursor_all > #all_exercises_sorted then
+        menu_cursor_all = math.max(1, #all_exercises_sorted)
+    end
+    if menu_cursor_char > #filtered_exercises then
+        menu_cursor_char = math.max(1, #filtered_exercises)
+    end
+end
 
 -- Forward declaration (capture table defined in [11b], referenced by draw_header)
 local capture
@@ -1407,18 +1631,18 @@ local function draw_header()
         draw_text(SCREEN_W - 60, 2, "vs " .. selected_opponent.name, COLOR.text_white)
     end
 
-    -- Line 2 (y=10): drill name or instructions on left, drill count on right
-    if engine.current_drill then
-        local drill_label = engine.current_drill.name
-        if get_drill_side(engine.current_drill.id) == "R" then
-            drill_label = drill_label .. " [R]"
+    -- Line 2 (y=10): exercise name or instructions on left, exercise count on right
+    if engine.current_exercise then
+        local exercise_label = engine.current_exercise.name
+        if get_exercise_side(engine.current_exercise.id) == "R" then
+            exercise_label = exercise_label .. " [R]"
         end
-        draw_text(4, 10, drill_label, COLOR.text_yellow)
+        draw_text(4, 10, exercise_label, COLOR.text_yellow)
     else
         draw_text(4, 10, "Start=Menu  Coin=Record", COLOR.text_gray)
     end
 
-    draw_text(SCREEN_W - 50, 10, #drills .. " drills", COLOR.text_gray)
+    draw_text(SCREEN_W - 50, 10, #exercises .. " exercises", COLOR.text_gray)
 end
 
 --- Draw the live combo tracker (below header)
@@ -1440,19 +1664,19 @@ local function draw_combo_tracker()
     end
 end
 
---- Draw the bottom info bar during active drill
+--- Draw the bottom info bar during active exercise
 local function draw_info_bar()
-    if not engine.current_drill then return end
+    if not engine.current_exercise then return end
     if engine.state == STATE_IDLE or engine.state == STATE_MENU then return end
 
-    local drill = engine.current_drill
-    local seq = drill.sequence
+    local ex = engine.current_exercise
+    local seq = ex.sequence
     local bar_y = SCREEN_H - 40
 
     draw_box(0, bar_y, SCREEN_W, 40, COLOR.bg_panel, COLOR.border)
 
     -- Notation line
-    draw_text(4, bar_y + 2, "DO: " .. get_notation(drill), COLOR.text_white)
+    draw_text(4, bar_y + 2, "DO: " .. get_notation(ex), COLOR.text_white)
 
     -- Step indicator with colored markers
     local step_str = "Step: "
@@ -1486,14 +1710,14 @@ local function draw_info_bar()
     draw_text(SCREEN_W - #att_str * 4 - 4, bar_y + 12, att_str, COLOR.text_white)
 
     -- Hint line
-    if drill.hints and #drill.hints > 0 then
+    if ex.hints and #ex.hints > 0 then
         -- Show first hint, or cycle hints on repeated failures
         local hint_idx = 1
-        local prog = progression[drill.id]
-        if prog and prog.attempts > 3 and #drill.hints > 1 then
-            hint_idx = ((prog.attempts - 1) % #drill.hints) + 1
+        local prog = progression[ex.id]
+        if prog and prog.attempts > 3 and #ex.hints > 1 then
+            hint_idx = ((prog.attempts - 1) % #ex.hints) + 1
         end
-        draw_text(4, bar_y + 24, "Hint: " .. drill.hints[hint_idx], COLOR.text_orange)
+        draw_text(4, bar_y + 24, "Hint: " .. ex.hints[hint_idx], COLOR.text_orange)
     end
 end
 
@@ -1504,7 +1728,7 @@ local function draw_result_banner()
         draw_box(SCREEN_W / 4, banner_y, SCREEN_W / 2, 30, COLOR.bg_success, COLOR.step_done)
         draw_text(SCREEN_W / 2 - 20, banner_y + 4, "CLEAR!", COLOR.text_green)
 
-        local prog = progression[engine.current_drill.id]
+        local prog = progression[engine.current_exercise.id]
         if prog then
             local comp_str = prog.completions .. "/" .. MASTERY_THRESHOLD
             if prog.mastered then
@@ -1532,69 +1756,141 @@ local function draw_setup_overlay()
     end
 end
 
---- Draw the drill selection menu
-local function draw_drill_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
-    draw_text(menu_x + menu_w - 60, menu_y + 2, #drills .. " drills", COLOR.text_gray)
+--- Draw the exercise selection menu
+--- @param ex_list table  — index list (all_exercises_sorted or filtered_exercises)
+--- @param cursor number  — current cursor position within ex_list
+--- @param is_all boolean — true when drawing the All tab (shows tag count indicator)
+local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h, ex_list, cursor, is_all)
+    -- Count display
+    if is_all then
+        draw_text(menu_x + menu_w - 60, menu_y + 2, #exercises .. " exercises", COLOR.text_gray)
+    elseif filter_active then
+        draw_text(menu_x + menu_w - 60, menu_y + 2,
+            #ex_list .. "/" .. #exercises, COLOR.text_gray)
+    else
+        draw_text(menu_x + menu_w - 60, menu_y + 2, #exercises .. " exercises", COLOR.text_gray)
+    end
 
     -- Empty state
-    if #drills == 0 then
-        draw_text(menu_x + 4, menu_y + 40, "No drills. Press Coin to record a combo.", COLOR.text_yellow)
+    if #ex_list == 0 then
+        if #exercises > 0 and filter_active and not is_all then
+            local opp_name = selected_opponent and selected_opponent.name or "opponent"
+            draw_text(menu_x + 4, menu_y + 40,
+                "No exercises for " .. opp_name .. ". Press Coin to record.", COLOR.text_yellow)
+        else
+            draw_text(menu_x + 4, menu_y + 40, "No exercises. Press Coin to record a combo.", COLOR.text_yellow)
+        end
         return
     end
 
-    local start_idx = 1
-    if menu_cursor > visible_rows then
-        start_idx = menu_cursor - visible_rows + 1
+    -- Build display rows: list of {type="header"|"exercise", ...}
+    -- Headers are non-selectable category separators; exercises map to ex_list indices
+    local display_rows = {}
+    local last_category = nil
+    for i = 1, #ex_list do
+        local ex = exercises[ex_list[i]]
+        local cat = ex.category or "combo"
+        if cat ~= last_category then
+            local label = CATEGORY_LABELS[cat] or cat:upper()
+            table.insert(display_rows, { type = "header", label = label })
+            last_category = cat
+        end
+        table.insert(display_rows, { type = "exercise", filtered_idx = i })
     end
 
-    for i = start_idx, math.min(#drills, start_idx + visible_rows - 1) do
-        local drill = drills[i]
-        local row_y = menu_y + 14 + (i - start_idx) * row_h
-        local prog = progression[drill.id]
-
-        if i == menu_cursor then
-            draw_box(menu_x + 2, row_y - 1, menu_w - 4, row_h, 0xFFFFFF40, COLOR.transparent)
-            draw_text(menu_x + 4, row_y, ">", COLOR.highlight)
-        end
-
-        local status = "  "
-        local name_color = COLOR.text_white
-        if prog and prog.mastered then
-            status = "* "
-            name_color = COLOR.text_green
-        elseif prog and prog.completions > 0 then
-            status = "~ "
-            name_color = COLOR.text_yellow
-        end
-
-        local diff_str = string.rep(".", drill.difficulty)
-        local side = get_drill_side(drill.id)
-        local side_color = (side == "R") and COLOR.text_cyan or COLOR.text_gray
-        draw_text(menu_x + 12, row_y, status .. drill.id:sub(3), COLOR.text_gray)
-        draw_text(menu_x + 44, row_y, drill.name, name_color)
-        draw_text(menu_x + menu_w - 62, row_y, "[" .. side .. "]", side_color)
-        draw_text(menu_x + menu_w - 50, row_y, diff_str, COLOR.text_orange)
-
-        if prog and prog.completions > 0 then
-            draw_text(menu_x + menu_w - 30, row_y,
-                prog.completions .. "/" .. MASTERY_THRESHOLD, COLOR.text_gray)
+    -- Find which display row the current cursor maps to
+    local cursor_display_row = 1
+    for dr_i, dr in ipairs(display_rows) do
+        if dr.type == "exercise" and dr.filtered_idx == cursor then
+            cursor_display_row = dr_i
+            break
         end
     end
 
-    -- Description and delete hint for selected drill
-    if drills[menu_cursor] then
-        local desc_y = menu_y + menu_h - 10
-        local sel = drills[menu_cursor]
-        if delete_confirm_id == sel.id then
-            draw_text(menu_x + 4, desc_y, "Press Fierce again to DELETE this drill", COLOR.text_red)
+    -- Scrolling: determine start display row based on cursor position
+    local start_dr = 1
+    if cursor_display_row > visible_rows then
+        start_dr = cursor_display_row - visible_rows + 1
+    end
+
+    local drawn = 0
+    for dr_i = start_dr, #display_rows do
+        if drawn >= visible_rows then break end
+
+        local dr = display_rows[dr_i]
+        local row_y = menu_y + 14 + drawn * row_h
+
+        if dr.type == "header" then
+            -- Category header: dim yellow, non-selectable
+            draw_text(menu_x + 4, row_y, "-- " .. dr.label .. " --", COLOR.text_yellow)
         else
-            draw_text(menu_x + 4, desc_y, sel.description or sel.name, COLOR.text_gray)
-            local hints_x = menu_x + menu_w - 80
+            local i = dr.filtered_idx
+            local ex = exercises[ex_list[i]]
+            local prog = progression[ex.id]
+
+            if i == cursor then
+                draw_box(menu_x + 2, row_y - 1, menu_w - 4, row_h, 0xFFFFFF40, COLOR.transparent)
+                draw_text(menu_x + 4, row_y, ">", COLOR.highlight)
+            end
+
+            local status = "  "
+            local name_color = COLOR.text_white
+            if prog and prog.mastered then
+                status = "* "
+                name_color = COLOR.text_green
+            elseif prog and prog.completions > 0 then
+                status = "~ "
+                name_color = COLOR.text_yellow
+            end
+
+            local diff_str = string.rep(".", ex.difficulty)
+            local side = get_exercise_side(ex.id)
+            local side_color = (side == "R") and COLOR.text_cyan or COLOR.text_gray
+            draw_text(menu_x + 12, row_y, status .. ex.id:sub(3), COLOR.text_gray)
+            draw_text(menu_x + 44, row_y, ex.name, name_color)
+            draw_text(menu_x + menu_w - 62, row_y, "[" .. side .. "]", side_color)
+            draw_text(menu_x + menu_w - 50, row_y, diff_str, COLOR.text_orange)
+
+            -- In All tab: show tag count; in Character tab: show completions
+            if is_all and ex.characters and #ex.characters > 0 then
+                -- Show number of tagged characters and highlight if current opponent is tagged
+                local tagged_for_opp = false
+                if selected_opponent then
+                    for _, cn in ipairs(ex.characters) do
+                        if cn == selected_opponent.name then tagged_for_opp = true; break end
+                    end
+                end
+                local tag_color = tagged_for_opp and COLOR.text_cyan or COLOR.text_gray
+                draw_text(menu_x + menu_w - 30, row_y, #ex.characters .. "ch", tag_color)
+            elseif prog and prog.completions > 0 then
+                draw_text(menu_x + menu_w - 30, row_y,
+                    prog.completions .. "/" .. MASTERY_THRESHOLD, COLOR.text_gray)
+            end
+        end
+        drawn = drawn + 1
+    end
+
+    -- Description, tag info, and button hints for selected exercise
+    if ex_list[cursor] and exercises[ex_list[cursor]] then
+        local desc_y = menu_y + menu_h - 10
+        local sel = exercises[ex_list[cursor]]
+        if delete_confirm_id == sel.id then
+            draw_text(menu_x + 4, desc_y, "Press Fierce again to DELETE this exercise", COLOR.text_red)
+        else
+            -- Show character tags if present, otherwise description
+            if sel.characters and #sel.characters > 0 then
+                local tag_str = "vs " .. table.concat(sel.characters, ", ")
+                draw_text(menu_x + 4, desc_y, tag_str, COLOR.text_cyan)
+            else
+                draw_text(menu_x + 4, desc_y, sel.description or sel.name, COLOR.text_gray)
+            end
+            local hints_x = menu_x + menu_w - 105
             if engine.state ~= STATE_IDLE then
                 draw_text(hints_x - 50, desc_y, "MP=Stop", COLOR.text_yellow)
             end
-            draw_text(hints_x - 25, desc_y, "LK=Side", COLOR.text_cyan)
-            draw_text(hints_x, desc_y, "HP=Del", COLOR.text_red)
+            draw_text(hints_x, desc_y, "LK=Side", COLOR.text_cyan)
+            draw_text(hints_x + 25, desc_y, "MK=Tag", COLOR.text_yellow)
+            draw_text(hints_x + 50, desc_y, "HP=Del", COLOR.text_red)
         end
     end
 end
@@ -1627,13 +1923,20 @@ local function draw_menu()
     draw_gradient_box(menu_x, menu_y, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
 
     -- Tab bar
-    local tab_drills_color = (menu_mode == MENU_DRILLS) and COLOR.text_yellow or COLOR.text_gray
+    local tab_all_color = (menu_mode == MENU_ALL_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
+    local char_label = selected_opponent and ("vs " .. selected_opponent.name) or "Character"
+    local tab_char_color = (menu_mode == MENU_CHAR_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
     local tab_opp_color = (menu_mode == MENU_OPPONENT) and COLOR.text_yellow or COLOR.text_gray
-    draw_text(menu_x + 4, menu_y + 2, "[Drills]", tab_drills_color)
-    draw_text(menu_x + 50, menu_y + 2, "[Opponent]", tab_opp_color)
+    draw_text(menu_x + 4, menu_y + 2, "[All]", tab_all_color)
+    draw_text(menu_x + 22, menu_y + 2, "[" .. char_label .. "]", tab_char_color)
+    draw_text(menu_x + menu_w - 48, menu_y + 2, "[Opponent]", tab_opp_color)
 
-    if menu_mode == MENU_DRILLS then
-        draw_drill_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
+    if menu_mode == MENU_ALL_EXERCISES then
+        draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h,
+            all_exercises_sorted, menu_cursor_all, true)
+    elseif menu_mode == MENU_CHAR_EXERCISES then
+        draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h,
+            filtered_exercises, menu_cursor_char, false)
     else
         draw_opponent_tab(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
     end
@@ -1657,12 +1960,12 @@ local function draw_debug()
 end
 
 -- ============================================================================
--- [11b] DRILL CAPTURE TOOL
+-- [11b] EXERCISE CAPTURE TOOL
 -- ============================================================================
 
 -- Forward declarations (defined later, called from capture_stop below)
-local build_drill_from_capture
-local save_custom_drills
+local build_exercise_from_capture
+local save_exercises
 
 capture = {
     active = false,
@@ -1676,7 +1979,7 @@ capture = {
     setup_snapshot = nil,  -- positions, flip, meter, charges, corner at recording start
 }
 
--- Result banner for drill creation feedback
+-- Result banner for exercise creation feedback
 local capture_result = nil       -- string message to display
 local capture_result_timer = 0   -- countdown frames
 
@@ -1700,7 +2003,7 @@ local function capture_start()
         corner = is_near_corner(game_state.p2.x_pos),
     }
 
-    -- Pause any active drill
+    -- Pause any active exercise
     if engine.state == STATE_ACTIVE or engine.state == STATE_SETUP then
         engine.state = STATE_IDLE
     end
@@ -1742,16 +2045,17 @@ local function capture_stop()
         f:close()
     end
 
-    -- Build a playable drill from the capture
-    local new_drill = build_drill_from_capture()
-    if new_drill then
-        table.insert(drills, new_drill)
+    -- Build a playable exercise from the capture
+    local new_exercise = build_exercise_from_capture()
+    if new_exercise then
+        table.insert(exercises, new_exercise)
         init_progression()
-        save_custom_drills()
+        rebuild_filtered_exercises()
+        save_exercises()
         save_progression()
-        capture_result = "DRILL CREATED: " .. new_drill.name
+        capture_result = "EXERCISE CREATED: " .. new_exercise.name
         capture_result_timer = 180  -- 3 seconds at 60fps
-        print("[Capture] Created drill: " .. new_drill.id .. " - " .. new_drill.name)
+        print("[Capture] Created exercise: " .. new_exercise.id .. " - " .. new_exercise.name)
     else
         capture_result = nil
         capture_result_timer = 0
@@ -1830,7 +2134,7 @@ end
 -- [11c2] INPUT NOTATION DETECTOR
 -- ============================================================================
 -- Converts raw joypad input logs into human-readable move notation.
--- Used by the record-to-drill system as a fallback when MOVES lookup fails.
+-- Used by the record-to-exercise system as a fallback when MOVES lookup fails.
 
 --- Convert directional booleans to numpad value (1-9)
 --- flip: 0 = facing right (right=forward), 1 = facing left (left=forward)
@@ -2040,20 +2344,20 @@ local function build_notation(motion_sf, motion_numpad, button)
 end
 
 -- ============================================================================
--- [11c3] DRILL BUILDER (Record-to-Drill)
+-- [11c3] EXERCISE BUILDER (Record-to-Exercise)
 -- ============================================================================
--- Converts a captured combo recording into a complete, playable drill definition.
+-- Converts a captured combo recording into a complete, playable exercise definition.
 
---- Build a complete drill table from capture data
---- Returns a drill table or nil if capture is invalid
-build_drill_from_capture = function()
+--- Build a complete exercise table from capture data
+--- Returns an exercise table or nil if capture is invalid
+build_exercise_from_capture = function()
     if #capture.sequence == 0 then
-        print("[Capture] No hits recorded -- no drill created")
+        print("[Capture] No hits recorded -- no exercise created")
         return nil
     end
 
-    custom_drill_counter = custom_drill_counter + 1
-    local drill_id = string.format("c_%02d", custom_drill_counter)
+    exercise_counter = exercise_counter + 1
+    local exercise_id = string.format("c_%02d", exercise_counter)
 
     local sequence = {}
     local notations_sf = {}
@@ -2141,11 +2445,11 @@ build_drill_from_capture = function()
     end
 
     if #sequence == 0 then
-        print("[Capture] All hits collapsed (multi-hit move) -- no drill created")
+        print("[Capture] All hits collapsed (multi-hit move) -- no exercise created")
         return nil
     end
 
-    -- Build drill name (truncate to 40 chars)
+    -- Build exercise name (truncate to 40 chars)
     local full_name = table.concat(move_names, " > ")
     if #full_name > 40 then
         full_name = full_name:sub(1, 37) .. "..."
@@ -2175,15 +2479,13 @@ build_drill_from_capture = function()
     -- Difficulty: clamped sequence length
     local difficulty = clamp(#sequence, 1, 5)
 
-    local drill = {
-        id = drill_id,
-        tier = 0,
-        custom = true,
+    local new_exercise = {
+        id = exercise_id,
         name = full_name,
         notation = notation_sf_str,
         numpad = notation_np_str,
         difficulty = difficulty,
-        description = "Custom drill: " .. notation_sf_str,
+        category = "combo",
         setup = setup,
         sequence = sequence,
         success = { min_combo = #sequence },
@@ -2193,90 +2495,111 @@ build_drill_from_capture = function()
 
     -- Auto-set allow_combo_reset for multi-combo sequences (e.g. Aegis setups)
     if has_combo_reset then
-        drill.allow_combo_reset = true
+        new_exercise.allow_combo_reset = true
     end
 
-    return drill
+    -- Auto-tag with current opponent
+    if selected_opponent then
+        new_exercise.characters = { selected_opponent.name }
+    end
+
+    return new_exercise
 end
 
 -- ============================================================================
--- [11c4] CUSTOM DRILL PERSISTENCE
+-- [11c4] EXERCISE PERSISTENCE
 -- ============================================================================
 
---- Save all custom drills to file
-save_custom_drills = function()
-    local f = io.open(CUSTOM_DRILL_FILE, "w")
+--- Write a single exercise to an open file handle
+local function write_exercise(f, exercise)
+    f:write("---\n")
+    f:write("ID:" .. exercise.id .. "\n")
+    f:write("NAME:" .. exercise.name .. "\n")
+    f:write("NOTATION_SF:" .. (exercise.notation or "") .. "\n")
+    f:write("NOTATION_NP:" .. (exercise.numpad or "") .. "\n")
+    f:write("DIFFICULTY:" .. (exercise.difficulty or 1) .. "\n")
+    f:write("CATEGORY:" .. (exercise.category or "combo") .. "\n")
+    -- Character tags (optional)
+    if exercise.characters and #exercise.characters > 0 then
+        f:write("CHARS:" .. table.concat(exercise.characters, ",") .. "\n")
+    end
+
+    -- Setup: p1_x,p2_x,p1_life,p2_life,meter,h_charge,v_charge,p2_state,corner
+    local s = exercise.setup
+    f:write(string.format("SETUP:%04X,%04X,%02X,%02X,%s,%d,%d,%s,%d\n",
+        s.p1_x, s.p2_x, s.p1_life, s.p2_life,
+        s.meter or "full",
+        s.fill_h_charge and 1 or 0,
+        s.fill_v_charge and 1 or 0,
+        s.p2_state or "stand",
+        s.corner and 1 or 0))
+
+    -- Sequence: name,hit_type,action_id1;action_id2|name,hit_type,...
+    local seq_parts = {}
+    for _, step in ipairs(exercise.sequence) do
+        local ids = table.concat(step.action_ids, ";")
+        table.insert(seq_parts, step.name .. "," .. step.hit_type .. "," .. ids)
+    end
+    f:write("SEQ:" .. table.concat(seq_parts, "|") .. "\n")
+
+    f:write("SUCCESS:" .. (exercise.success.min_combo or #exercise.sequence) .. "\n")
+    -- Timeout (if set)
+    if exercise.fail and exercise.fail.timeout_frames then
+        f:write("TIMEOUT:" .. exercise.fail.timeout_frames .. "\n")
+    end
+    -- Multi-combo reset flag (Aegis setups)
+    if exercise.allow_combo_reset then
+        f:write("RESETOK:1\n")
+    end
+    -- Hints
+    if exercise.hints and #exercise.hints > 0 then
+        f:write("HINT:" .. exercise.hints[1] .. "\n")
+    end
+
+    f:write("---\n")
+end
+
+--- Save custom (non-shipped) exercises to the custom file
+save_exercises = function()
+    local f = io.open(CUSTOM_EXERCISE_FILE, "w")
     if not f then
-        print("[Urien Lab] Could not write custom drills file")
+        print("[Urien Lab] Could not write custom exercises file")
         return
     end
 
-    f:write("# Urien Lab Custom Drills\n")
-    f:write("# Edit NAME: lines to rename your combos, then press Alt+9 in-game to reload\n")
+    f:write("# Urien Lab Custom Exercises\n")
+    f:write("# Your captured and custom exercises (not overwritten by updates)\n")
+    f:write("# CATEGORY: combo | unblockable | sequence | parry\n")
 
-    for _, drill in ipairs(drills) do
-        if drill.custom then
-            f:write("---\n")
-            f:write("ID:" .. drill.id .. "\n")
-            f:write("NAME:" .. drill.name .. "\n")
-            f:write("NOTATION_SF:" .. (drill.notation or "") .. "\n")
-            f:write("NOTATION_NP:" .. (drill.numpad or "") .. "\n")
-            f:write("DIFFICULTY:" .. (drill.difficulty or 1) .. "\n")
-
-            -- Setup: p1_x,p2_x,p1_life,p2_life,meter,h_charge,v_charge,p2_state,corner
-            local s = drill.setup
-            f:write(string.format("SETUP:%04X,%04X,%02X,%02X,%s,%d,%d,%s,%d\n",
-                s.p1_x, s.p2_x, s.p1_life, s.p2_life,
-                s.meter or "full",
-                s.fill_h_charge and 1 or 0,
-                s.fill_v_charge and 1 or 0,
-                s.p2_state or "stand",
-                s.corner and 1 or 0))
-
-            -- Sequence: name,hit_type,action_id1;action_id2|name,hit_type,...
-            local seq_parts = {}
-            for _, step in ipairs(drill.sequence) do
-                local ids = table.concat(step.action_ids, ";")
-                table.insert(seq_parts, step.name .. "," .. step.hit_type .. "," .. ids)
-            end
-            f:write("SEQ:" .. table.concat(seq_parts, "|") .. "\n")
-
-            f:write("SUCCESS:" .. (drill.success.min_combo or #drill.sequence) .. "\n")
-            -- Multi-combo reset flag (Aegis setups)
-            if drill.allow_combo_reset then
-                f:write("RESETOK:1\n")
-            end
-            -- Hints
-            if drill.hints and #drill.hints > 0 then
-                f:write("HINT:" .. drill.hints[1] .. "\n")
-            end
-
-            f:write("---\n")
+    for _, exercise in ipairs(exercises) do
+        if not exercise.shipped then
+            write_exercise(f, exercise)
         end
     end
 
     f:close()
 end
 
---- Load custom drills from file
-local function load_custom_drills()
-    local f = io.open(CUSTOM_DRILL_FILE, "r")
-    if not f then return end
+--- Load exercises from a single file, marking each with shipped flag
+local function load_exercises_from_file(path, shipped_flag)
+    local f = io.open(path, "r")
+    if not f then return 0 end
 
     local current = nil
+    local count = 0
     local max_counter = 0
 
     for line in f:lines() do
         if line == "---" then
             if current then
-                -- Finalize and add drill
+                -- Finalize and add exercise
                 if current.id and current.sequence and #current.sequence > 0 then
-                    current.custom = true
-                    current.tier = 0
-                    if not current.description then
-                        current.description = "Custom drill: " .. (current.notation or current.name)
+                    if not current.category then
+                        current.category = "combo"  -- default category
                     end
-                    table.insert(drills, current)
+                    current.shipped = shipped_flag
+                    table.insert(exercises, current)
+                    count = count + 1
 
                     -- Track max counter for ID generation
                     local num = tonumber(current.id:match("c_(%d+)"))
@@ -2301,6 +2624,16 @@ local function load_custom_drills()
                     current.numpad = value
                 elseif key == "DIFFICULTY" then
                     current.difficulty = tonumber(value) or 1
+                elseif key == "CATEGORY" then
+                    current.category = value
+                elseif key == "CHARS" then
+                    current.characters = {}
+                    for char_name in value:gmatch("[^,]+") do
+                        local trimmed = char_name:match("^%s*(.-)%s*$")
+                        if trimmed and trimmed ~= "" then
+                            table.insert(current.characters, trimmed)
+                        end
+                    end
                 elseif key == "SETUP" then
                     local p1x, p2x, p1l, p2l, meter, hc, vc, p2s, corner =
                         value:match("^(%x+),(%x+),(%x+),(%x+),(%w+),(%d+),(%d+),(%w+),(%d+)")
@@ -2347,39 +2680,36 @@ local function load_custom_drills()
     end
 
     f:close()
-    custom_drill_counter = max_counter
 
-    -- Count loaded
-    local count = 0
-    for _, drill in ipairs(drills) do
-        if drill.custom then count = count + 1 end
+    -- Update exercise_counter from max c_ ID seen
+    if max_counter > exercise_counter then
+        exercise_counter = max_counter
     end
-    if count > 0 then
-        print("[Urien Lab] Loaded " .. count .. " custom drills")
+
+    return count
+end
+
+--- Load exercises from both shipped and custom files
+local function load_exercises()
+    local shipped_count = load_exercises_from_file(EXERCISE_FILE, true)
+    local custom_count = load_exercises_from_file(CUSTOM_EXERCISE_FILE, false)
+    local total = shipped_count + custom_count
+    if total > 0 then
+        print("[Urien Lab] Loaded " .. total .. " exercises (" .. shipped_count .. " shipped, " .. custom_count .. " custom)")
     end
 end
 
---- Reload custom drills from file (after user edits names, etc.)
-local function reload_custom_drills()
-    -- Remove existing custom drills from the drills table
-    local i = 1
-    while i <= #drills do
-        if drills[i].custom then
-            table.remove(drills, i)
-        else
-            i = i + 1
-        end
-    end
-    -- Re-read from file
-    load_custom_drills()
-    -- Sync progression with updated drill list
+--- Reload exercises from file (after user edits names, etc.)
+local function reload_exercises()
+    -- Clear all exercises
+    exercises = {}
+    exercise_counter = 0
+    -- Re-read from both files
+    load_exercises()
+    -- Sync progression with updated exercise list
     init_progression()
-    -- Count reloaded
-    local count = 0
-    for _, drill in ipairs(drills) do
-        if drill.custom then count = count + 1 end
-    end
-    print("[Urien Lab] Reloaded " .. count .. " custom drills")
+    rebuild_filtered_exercises()
+    print("[Urien Lab] Reloaded " .. #exercises .. " exercises")
 end
 
 -- ============================================================================
@@ -2405,9 +2735,17 @@ end
 
 --- Handle character select input (app-level)
 local function handle_charselect_input()
-    -- Start toggles the charselect overlay
+    -- Start: hide overlay and enter training mode (if a match is loaded)
     if is_pressed("P1 Start") then
-        charselect_visible = not charselect_visible
+        if charselect_visible then
+            charselect_visible = false
+            if game_state.playing then
+                app_state = APP_TRAINING
+                engine.state = STATE_IDLE
+            end
+        else
+            charselect_visible = true
+        end
         return
     end
 
@@ -2452,80 +2790,130 @@ end
 local function handle_menu_input()
     if not show_menu then return end
 
-    -- Tab switching: Left/Right
-    if is_pressed("P1 Left") or is_pressed("P1 Right") then
-        if menu_mode == MENU_DRILLS then
-            menu_mode = MENU_OPPONENT
-        else
-            menu_mode = MENU_DRILLS
-        end
+    -- Tab switching: Left/Right cycles All → Character → Opponent → All
+    if is_pressed("P1 Right") then
+        if menu_mode == MENU_ALL_EXERCISES then menu_mode = MENU_CHAR_EXERCISES
+        elseif menu_mode == MENU_CHAR_EXERCISES then menu_mode = MENU_OPPONENT
+        else menu_mode = MENU_ALL_EXERCISES end
+        delete_confirm_id = nil
+        return
+    elseif is_pressed("P1 Left") then
+        if menu_mode == MENU_ALL_EXERCISES then menu_mode = MENU_OPPONENT
+        elseif menu_mode == MENU_OPPONENT then menu_mode = MENU_CHAR_EXERCISES
+        else menu_mode = MENU_ALL_EXERCISES end
+        delete_confirm_id = nil
         return
     end
 
-    if menu_mode == MENU_DRILLS then
-        -- Drill menu navigation
+    if menu_mode == MENU_ALL_EXERCISES or menu_mode == MENU_CHAR_EXERCISES then
+        -- Determine active list and cursor based on tab
+        local ex_list, cur
+        if menu_mode == MENU_ALL_EXERCISES then
+            ex_list = all_exercises_sorted
+            cur = menu_cursor_all
+        else
+            ex_list = filtered_exercises
+            cur = menu_cursor_char
+        end
+
+        -- Exercise menu navigation
         if is_pressed("P1 Up") then
-            menu_cursor = menu_cursor - 1
-            if menu_cursor < 1 then menu_cursor = #drills end
-            delete_confirm_id = nil  -- reset delete confirm on navigation
+            if #ex_list > 0 then
+                cur = cur - 1
+                if cur < 1 then cur = #ex_list end
+            end
+            delete_confirm_id = nil
         elseif is_pressed("P1 Down") then
-            menu_cursor = menu_cursor + 1
-            if menu_cursor > #drills then menu_cursor = 1 end
+            if #ex_list > 0 then
+                cur = cur + 1
+                if cur > #ex_list then cur = 1 end
+            end
             delete_confirm_id = nil
         elseif is_pressed("P1 Weak Punch") then
             delete_confirm_id = nil
-            select_drill(menu_cursor)
-            show_menu = false
+            if ex_list[cur] then
+                select_exercise(ex_list[cur])
+                show_menu = false
+            end
         elseif is_pressed("P1 Medium Punch") then
             delete_confirm_id = nil
             if engine.state ~= STATE_IDLE then
                 engine.state = STATE_IDLE
-                engine.current_drill = nil
+                engine.current_exercise = nil
             else
                 show_menu = false
             end
         elseif is_pressed("P1 Strong Punch") then
-            -- Delete custom drill (requires double-press to confirm)
-            local sel = drills[menu_cursor]
-            if sel and sel.custom then
-                if delete_confirm_id == sel.id then
-                    -- Second press: actually delete
-                    -- Remove from drills array
-                    table.remove(drills, menu_cursor)
-                    -- Clear progression for this drill
+            -- Delete exercise (requires double-press to confirm)
+            local real_idx = ex_list[cur]
+            local sel = real_idx and exercises[real_idx]
+            if sel then
+                if sel.shipped then
+                    print("[Urien Lab] Shipped exercises can't be deleted")
+                    delete_confirm_id = nil
+                elseif delete_confirm_id == sel.id then
+                    table.remove(exercises, real_idx)
                     progression[sel.id] = nil
-                    -- Adjust cursor
-                    if menu_cursor > #drills then menu_cursor = #drills end
-                    if menu_cursor < 1 then menu_cursor = 1 end
-                    -- Re-save
-                    save_custom_drills()
+                    rebuild_filtered_exercises()
+                    save_exercises()
                     save_progression()
                     delete_confirm_id = nil
-                    print("[Urien Lab] Deleted custom drill: " .. sel.name)
+                    print("[Urien Lab] Deleted exercise: " .. sel.name)
                 else
-                    -- First press: ask for confirmation
                     delete_confirm_id = sel.id
                 end
             end
         elseif is_pressed("P1 Weak Kick") then
-            -- Toggle side (L/R) for highlighted drill
-            if drills[menu_cursor] then
-                toggle_drill_side(drills[menu_cursor].id)
+            -- Toggle side (L/R) for highlighted exercise
+            local real_idx = ex_list[cur]
+            if real_idx and exercises[real_idx] then
+                toggle_exercise_side(exercises[real_idx].id)
                 save_progression()
             end
+        elseif is_pressed("P1 Medium Kick") then
+            -- Toggle current opponent tag on highlighted exercise
+            local real_idx = ex_list[cur]
+            local sel = real_idx and exercises[real_idx]
+            if sel and selected_opponent then
+                local opp = selected_opponent.name
+                if not sel.characters then sel.characters = {} end
+                local found = false
+                for j, char_name in ipairs(sel.characters) do
+                    if char_name == opp then
+                        table.remove(sel.characters, j)
+                        found = true
+                        print("[Urien Lab] Untagged " .. opp .. " from " .. sel.name)
+                        break
+                    end
+                end
+                if not found then
+                    table.insert(sel.characters, opp)
+                    print("[Urien Lab] Tagged " .. sel.name .. " for " .. opp)
+                end
+                if sel.shipped then
+                    print("[Urien Lab] Tag change is session-only for shipped exercises")
+                else
+                    save_exercises()
+                end
+                rebuild_filtered_exercises()
+            end
+        end
+
+        -- Write cursor back to the correct variable
+        if menu_mode == MENU_ALL_EXERCISES then
+            menu_cursor_all = cur
+        else
+            menu_cursor_char = cur
         end
     else
         -- Opponent tab
         if is_pressed("P1 Weak Punch") then
-            -- Return to character select
             app_state = APP_CHARSELECT
             engine.state = STATE_IDLE
-            engine.current_drill = nil
+            engine.current_exercise = nil
             show_menu = false
         elseif is_pressed("P1 Strong Punch") then
-            -- Re-save current state for selected opponent
             if selected_opponent and game_state.playing then
-                -- Find the index in CHARACTERS for the selected opponent
                 for i, char in ipairs(CHARACTERS) do
                     if char.id == selected_opponent.id then
                         save_char_state(i)
@@ -2536,7 +2924,7 @@ local function handle_menu_input()
         elseif is_pressed("P1 Medium Punch") then
             if engine.state ~= STATE_IDLE then
                 engine.state = STATE_IDLE
-                engine.current_drill = nil
+                engine.current_exercise = nil
             else
                 show_menu = false
             end
@@ -2552,7 +2940,7 @@ local function handle_input()
             show_menu = false
         else
             show_menu = true
-            -- Pause drill when opening menu
+            -- Pause exercise when opening menu
             if engine.state == STATE_ACTIVE then
                 engine.state = STATE_SETUP
                 engine.setup_timer = SETUP_DELAY_FRAMES
@@ -2560,7 +2948,7 @@ local function handle_input()
         end
     end
 
-    -- Coin = Toggle record-to-drill capture
+    -- Coin = Toggle record-to-exercise capture
     if is_pressed("P1 Coin") then
         capture_toggle()
     end
@@ -2570,12 +2958,63 @@ local function handle_input()
     end
 end
 
+--- Update the game character select sequence (called from on_frame)
+local function update_charselect_sequence()
+    if charselect_seq == CHARSELECT_SELECTING then
+        -- Check if both players have locked in their characters
+        local p1 = memory.readbyte(MEM.p1_locked)
+        local p2 = memory.readbyte(MEM.p2_locked)
+        if p1 == 0xFF and p2 == 0xFF then
+            charselect_seq = CHARSELECT_TRANSITIONING
+            emu.speedmode("turbo")
+            print("[Urien Lab] Characters locked -- fast-forwarding to match...")
+        end
+    elseif charselect_seq == CHARSELECT_TRANSITIONING then
+        -- Wait for match to start (phase 2 = playing)
+        local phase = memory.readword(MEM.game_phase)
+        if phase == 2 then
+            emu.speedmode("normal")
+            charselect_seq = CHARSELECT_NONE
+            app_state = APP_TRAINING
+            charselect_visible = false
+            selected_opponent = nil
+            rebuild_filtered_exercises()
+            -- Freeze timer immediately so it doesn't tick
+            memory.writebyte(MEM.round_timer, 100)
+            print("[Urien Lab] Match started -- training mode active")
+        end
+    end
+end
+
 --- Main per-frame callback (before emulation)
 local function on_frame()
+    -- Game character select: fast-forward phase skips everything
+    if charselect_seq == CHARSELECT_TRANSITIONING then
+        update_charselect_sequence()
+        return
+    end
+
+    -- Game character select: selecting phase allows overlay input
+    if charselect_seq == CHARSELECT_SELECTING then
+        read_input()
+        update_charselect_sequence()
+        if is_pressed("P1 Coin") then
+            charselect_visible = not charselect_visible
+        end
+        if charselect_visible then
+            handle_charselect_input()
+        end
+        return
+    end
+
     -- Auto-load first available save state on startup
     if pending_home_load then
         pending_home_load = false
-        load_home_state()
+        if file_exists(CHARSELECT_SAVE) or fetch_save_state(CHARSELECT_SAVE) then
+            start_character_select()
+        else
+            load_home_state()
+        end
         return  -- skip this frame to let loaded state settle
     end
 
@@ -2585,6 +3024,9 @@ local function on_frame()
 
     if app_state == APP_CHARSELECT then
         handle_charselect_input()
+        -- If we just transitioned to training, skip this frame so Start
+        -- doesn't also toggle the exercise menu
+        if app_state ~= APP_CHARSELECT then return end
         if game_state.playing then
             -- Freeze game inputs while the charselect overlay is visible
             if charselect_visible then
@@ -2605,7 +3047,7 @@ local function on_frame()
     end
     combo_tracker_update()
 
-    -- Keep dummy locked when drill is active
+    -- Keep dummy locked when exercise is active
     if engine.state == STATE_SETUP or engine.state == STATE_ACTIVE then
         lock_dummy()
     end
@@ -2613,6 +3055,21 @@ end
 
 --- GUI drawing callback (runs AFTER game logic, so memory writes here stick)
 local function on_gui()
+    -- Game character select sequence: freeze timer and draw HUD
+    if charselect_seq == CHARSELECT_SELECTING then
+        memory.writebyte(MEM.char_select_timer, 0x69)
+        if charselect_visible then
+            draw_charselect()
+        else
+            draw_text(4, 4, "URIEN LAB -- Select characters", COLOR.text_cyan)
+            draw_text(4, 14, "Coin = Quick-load matchup", COLOR.text_gray)
+        end
+        return
+    elseif charselect_seq == CHARSELECT_TRANSITIONING then
+        draw_text(4, 4, "Loading match...", COLOR.text_cyan)
+        return
+    end
+
     if game_state.playing then
         -- Freeze round timer (infinite time)
         memory.writebyte(MEM.round_timer, 100)
@@ -2664,7 +3121,7 @@ local function on_gui()
     draw_menu()
     draw_debug()
 
-    -- Drill creation confirmation banner
+    -- Exercise creation confirmation banner
     if capture_result and capture_result_timer > 0 then
         capture_result_timer = capture_result_timer - 1
         local banner_y = 32
@@ -2676,7 +3133,7 @@ end
 --- Savestate load callback: reset engine state to avoid desync
 local function on_savestate_load()
     if engine.state == STATE_ACTIVE then
-        reset_drill()
+        reset_exercise()
     end
     reset_hit_tracking()
     -- Reset combo tracker to prevent stale display
@@ -2697,13 +3154,14 @@ end
 -- [13] HOOK REGISTRATION
 -- ============================================================================
 
--- Migrate old file names (learn_urien_* -> urien_lab_*)
+-- Migrate old file names (learn_urien_* -> urien_lab_*, custom_drills -> exercises)
 local function migrate_file_names()
     local renames = {
         {"learn_urien_save.txt", SAVE_FILE},
         {"learn_urien_matchups.txt", MATCHUP_FILE},
         {"learn_urien_characters.txt", CHAR_SAVE_FILE},
-        {"learn_urien_custom_drills.txt", CUSTOM_DRILL_FILE},
+        {"learn_urien_custom_drills.txt", EXERCISE_FILE},
+        {"urien_lab_custom_drills.txt", EXERCISE_FILE},
     }
     for _, pair in ipairs(renames) do
         if file_exists(pair[1]) and not file_exists(pair[2]) then
@@ -2715,10 +3173,89 @@ end
 
 migrate_file_names()
 
--- Load custom drills FIRST (before progression, so init_progression sees custom drill IDs)
-load_custom_drills()
+-- Migrate c_* exercises from shipped file to custom file (one-time migration)
+local function migrate_custom_exercises()
+    -- Skip if custom file already exists (migration already done)
+    if file_exists(CUSTOM_EXERCISE_FILE) then return end
+    -- Read shipped exercise file
+    local f = io.open(EXERCISE_FILE, "r")
+    if not f then return end
+    local content = f:read("*a")
+    f:close()
+
+    -- Split into blocks (between --- delimiters)
+    local shipped_blocks = {}
+    local custom_blocks = {}
+    local has_custom = false
+
+    -- Parse blocks: each exercise is between two "---" lines
+    local current_block = {}
+    local in_block = false
+    for line in content:gmatch("[^\n]+") do
+        if line == "---" then
+            if in_block and #current_block > 0 then
+                local block_text = table.concat(current_block, "\n")
+                -- Check if this block has a c_* ID
+                local id = block_text:match("ID:(c_%d+)")
+                if id then
+                    table.insert(custom_blocks, block_text)
+                    has_custom = true
+                else
+                    table.insert(shipped_blocks, block_text)
+                end
+                current_block = {}
+                in_block = false
+            else
+                in_block = true
+                current_block = {}
+            end
+        elseif in_block then
+            table.insert(current_block, line)
+        end
+    end
+
+    if not has_custom then return end
+
+    -- Write custom exercises to custom file
+    local cf = io.open(CUSTOM_EXERCISE_FILE, "w")
+    if cf then
+        cf:write("# Urien Lab Custom Exercises\n")
+        cf:write("# Your captured and custom exercises (not overwritten by updates)\n")
+        cf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
+        for _, block in ipairs(custom_blocks) do
+            cf:write("---\n")
+            cf:write(block .. "\n")
+            cf:write("---\n")
+        end
+        cf:close()
+        print("[Urien Lab] Migrated " .. #custom_blocks .. " custom exercises to " .. CUSTOM_EXERCISE_FILE)
+    end
+
+    -- Rewrite shipped file without c_* entries
+    local sf = io.open(EXERCISE_FILE, "w")
+    if sf then
+        sf:write("# Urien Lab Exercises\n")
+        sf:write("# Shipped exercises (updated automatically, do not add custom exercises here)\n")
+        sf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
+        for _, block in ipairs(shipped_blocks) do
+            sf:write("---\n")
+            sf:write(block .. "\n")
+            sf:write("---\n")
+        end
+        sf:close()
+    end
+end
+
+migrate_custom_exercises()
+
+-- Check for script updates from GitHub
+check_for_updates()
+
+-- Load exercises FIRST (before progression, so init_progression sees exercise IDs)
+load_exercises()
 -- Load saved progress, matchup slots, and character states
 load_progression()
+rebuild_filtered_exercises()
 load_matchup_metadata()
 load_char_metadata()
 migrate_legacy_saves()
@@ -2730,19 +3267,26 @@ emu.registerstart(on_start)
 savestate.registerload(on_savestate_load)
 
 -- Register hotkeys
+-- Alt+1 = Return to character select / save character select state
+input.registerhotkey(1, function()
+    if start_character_select() then
+        show_menu = false
+    end
+end)
+
 -- Alt+2 = Toggle numpad notation
 input.registerhotkey(2, function()
     toggle_notation()
     print("[Urien Lab] Notation: " .. (notation_mode == NOTATION_SF and "SF" or "Numpad"))
 end)
 
--- Alt+3 = Reset current drill progress
+-- Alt+3 = Reset current exercise progress
 input.registerhotkey(3, function()
-    if engine.current_drill then
-        local id = engine.current_drill.id
+    if engine.current_exercise then
+        local id = engine.current_exercise.id
         progression[id] = { completions = 0, attempts = 0, mastered = false }
         save_progression()
-        print("[Urien Lab] Reset progress for: " .. engine.current_drill.name)
+        print("[Urien Lab] Reset progress for: " .. engine.current_exercise.name)
     end
 end)
 
@@ -2772,9 +3316,9 @@ input.registerhotkey(7, function()
     print("[Urien Lab] To rename, edit " .. MATCHUP_FILE .. " directly")
 end)
 
--- Alt+9 = Reload custom drills (after editing file)
+-- Alt+9 = Reload exercises (after editing file)
 input.registerhotkey(9, function()
-    reload_custom_drills()
+    reload_exercises()
 end)
 
 -- Startup message
@@ -2787,14 +3331,16 @@ print("    D-Pad     = Navigate characters")
 print("    Jab       = Load opponent state")
 print("    Fierce    = Save current state")
 print("  TRAINING:")
-print("    Start     = Open drill menu")
-print("    Left/Right= Switch tabs (Drills/Opponent)")
-print("    LK        = Toggle drill side (L/R)")
-print("    MP        = Stop drill (in menu)")
+print("    Start     = Open exercise menu")
+print("    Left/Right= Switch tabs (Exercises/Opponent)")
+print("    LK        = Toggle exercise side (L/R)")
+print("    MK        = Tag/untag opponent on exercise")
+print("    MP        = Stop exercise (in menu)")
 print("  Coin        = Toggle capture mode")
+print("  Alt+1       = Return to character select")
 print("  Alt+2       = Toggle notation (SF/Numpad)")
-print("  Alt+3       = Reset current drill progress")
+print("  Alt+3       = Reset current exercise progress")
 print("  Alt+4       = Toggle debug display")
 print("  Alt+5       = Toggle menu (backup)")
-print("  Alt+9       = Reload custom drills (after editing file)")
+print("  Alt+9       = Reload exercises (after editing file)")
 print("===========================================")
