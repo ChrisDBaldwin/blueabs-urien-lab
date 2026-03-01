@@ -1,20 +1,20 @@
 # Blueabs Urien Lab
 
-A Lua training script for **Urien** in **Street Fighter III: 3rd Strike**, running on the [FBNeo](https://github.com/finalburnneo/FBNeo) emulator.
+A Lua training script for **Urien** in **Street Fighter III: 3rd Strike** on [FBNeo](https://github.com/finalburnneo/FBNeo).
 
-Practice combos through a curriculum-driven exercise system — from basic normals and charge specials through tackle loops to advanced Aegis Reflector unblockable setups. Record your own combos and turn them into replayable exercises with automatic move detection and notation.
+Learn Urien combos step by step — from basic confirms through tackle loops to Aegis unblockable setups. Record your own combos and the script turns them into exercises you can practice.
 
 ## Features
 
-- **Exercise curriculum** — Exercises organized by category (combo, unblockable, sequence, parry) with progression tracking and mastery (3 completions = mastered)
-- **Record-to-exercise** — Press Coin during a match to record a combo. The system identifies moves, detects input notation (charge, QCF, etc.), and builds a playable exercise automatically
-- **Per-character save states** — Save/load game states for each of the 19 opponents via a visual character select grid
-- **Live combo tracker** — Real-time move name display during free practice, independent of the exercise system
-- **Always-on training resources** — Infinite round timer, full super meter, stun cleared, delayed HP recovery after combos drop
-- **Multi-combo exercise support** — Aegis Reflector setups that involve multiple combo sequences (combo counter resets between parts) are fully supported
-- **Dual notation** — Toggle between Street Fighter notation (`b~f+MK`) and numpad notation (`[4]6MK`)
-- **Character-specific exercise tagging** — Tag exercises for specific opponents (MK in menu); the exercise list filters by current opponent so you only see relevant combos. Recorded exercises auto-tag with the current opponent
-- **Exercise persistence** — Exercises save to a human-editable text file; rename combos or tweak hints in a text editor, then reload in-game with Alt+9
+- **Guided exercises** — Combo, unblockable, sequence, and parry exercises with progression tracking (3 clears = mastered)
+- **Record your own** — Press Coin to capture a combo, and it becomes a playable exercise with auto-detected notation
+- **Per-opponent save states** — Save and load match states for each of the 19 characters
+- **Live combo tracker** — See move names in real time during free practice
+- **Training mode always on** — Infinite timer, full meter, stun cleared, HP recovers after combos drop
+- **Aegis multi-combo support** — Exercises that span multiple combo sequences (counter resets between parts)
+- **Dual notation** — Street Fighter (`b~f+MK`) or numpad (`[4]6MK`)
+- **Opponent tagging** — Tag exercises per matchup so only relevant combos show
+- **Editable exercise files** — Rename, tweak hints, or add exercises in a text file, then reload with Alt+9
 
 ## Requirements
 
@@ -33,33 +33,27 @@ The script will auto-load the first available save state and show the character 
 
 ## How to Use
 
-### First-Time Setup (per opponent)
+### Save a Match State (once per opponent)
 
-1. Start a match as **Urien** vs your chosen opponent in-game
-2. Press **Start** to show the character select overlay
-3. Navigate to the opponent in the grid with **D-Pad**
-4. Press **Fierce (Strong Punch)** to save the current match state
+1. Start a match as **Urien** vs any opponent
+2. Press **Start** to open the character select overlay
+3. Navigate to the opponent with **D-Pad**
+4. Press **Fierce** to save — reload any time with **Jab**
 
-After saving, you can load that opponent's state any time with **Jab (Weak Punch)**.
+### Practice Exercises
 
-### Practicing Exercises
+1. Press **Start** to open the exercise menu
+2. Browse with **Up/Down**, switch tabs with **Left/Right**
+3. Press **Jab** to start an exercise
+4. Perform the combo — the HUD tracks your progress
+5. Clear it 3 times to master it
 
-1. With a match loaded, press **Start** to open the exercise menu
-2. Use **Up/Down** to browse exercises, **Left/Right** to switch between the Exercises and Opponent tabs
-3. Press **Jab** to select an exercise
-4. The script positions both characters and waits for you to perform the combo
-5. Hit the moves in order — the HUD shows your progress through the sequence
-6. On success: "CLEAR!" banner, progression updated. On failure: reason displayed, try again
+### Record Your Own
 
-### Recording Exercises
-
-1. During a match, press **Coin** to start recording
-2. Perform any combo
-3. Press **Coin** again to stop recording
-4. The system automatically builds an exercise — it appears in the exercise menu under the COMBO category
-5. Exercises persist across sessions in `urien_lab_exercises.txt`
-
-To rename an exercise, edit the `NAME:` line in `urien_lab_exercises.txt` and press **Alt+9** in-game to reload.
+1. Press **Coin** to start recording
+2. Do the combo
+3. Press **Coin** again — the exercise appears in your menu
+4. Rename it in `urien_lab_exercises.txt` and press **Alt+9** to reload
 
 ### Controls
 
@@ -98,7 +92,7 @@ To rename an exercise, edit the `NAME:` line in `urien_lab_exercises.txt` and pr
 
 ## Exercise File Format
 
-Exercises are stored in `urien_lab_exercises.txt` as line-oriented key:value blocks:
+Exercises live in `urien_lab_exercises.txt`. Each exercise is a `---`-delimited block:
 
 ```
 ---
@@ -117,98 +111,50 @@ HINT:d+HP -> b~f+LK
 ---
 ```
 
-| Key | Description |
-|-----|-------------|
-| `ID` | Unique exercise identifier (`c_01`, `c_02`, ...) |
-| `NAME` | Display name (editable) |
-| `NOTATION_SF` / `NOTATION_NP` | Street Fighter / numpad notation strings |
-| `DIFFICULTY` | 1-5 rating |
-| `CATEGORY` | Exercise category: `combo`, `unblockable`, `sequence`, or `parry` (default: `combo`) |
-| `CHARS` | (Optional) Comma-separated opponent names to restrict exercise to (omit = universal) |
-| `SETUP` | `p1_x,p2_x,p1_life,p2_life,meter,h_charge,v_charge,p2_state,corner` |
-| `SEQ` | Pipe-separated sequence steps: `name,hit_type,action_id[;action_id]` |
-| `SUCCESS` | Minimum combo count required |
-| `TIMEOUT` | (Optional) Frames before auto-fail |
-| `RESETOK` | (Optional) `1` = allow combo counter resets mid-sequence (for Aegis setups) |
-| `HINT` | (Optional) Execution hint displayed during exercise |
+Most fields are auto-generated by the recorder. To customize, edit `NAME`, `HINT`, `CATEGORY` (`combo`/`unblockable`/`sequence`/`parry`), `CHARS` (opponent filter), or `DIFFICULTY` (1–5). Add `RESETOK:1` for Aegis setups where the combo counter resets mid-sequence.
 
 ## Architecture
 
-The script is a single-file Lua program (`urien_lab.lua`, ~3000 lines) organized into numbered sections:
+Single Lua file (~3000 lines), no dependencies. See `CLAUDE.md` for the full section map and technical details.
 
-| Section | Purpose |
-|---------|---------|
-| [1] | Constants, colors, timing configuration, exercise categories |
-| [2] | CPS3 memory address map |
-| [2b] | Character roster, grid layout, app state |
-| [3] | Move database (24 Urien moves with dual notation) |
-| [4] | Exercise definitions |
-| [5] | Progression tracking, save/load |
-| [6] | Utility functions |
-| [7] | Game state reader (per-frame memory polling) |
-| [8] | Dummy controller (P2 management, resource recovery) |
-| [9] | Exercise engine state machine (IDLE/SETUP/ACTIVE/SUCCESS/FAIL) |
-| [10] | Input display and notation toggle |
-| [11a-c] | Save states, HUD/menu, capture system, exercise builder, persistence |
-| [12] | Input handlers |
-| [13] | FBNeo hooks, hotkeys, initialization |
-
-Two-level state machine:
-- **App level:** `APP_CHARSELECT` / `APP_TRAINING` — controls character select vs training HUD
-- **Exercise level:** `IDLE` / `SETUP` / `ACTIVE` / `SUCCESS` / `FAIL` — manages individual exercise execution
+Two state machines drive the script:
+- **App level** — character select vs training mode
+- **Exercise level** — idle → active → success/fail
 
 ## Acknowledgments
 
-This project builds on foundational work from the SF3:3S Lua scripting community:
+Built on work from the SF3:3S Lua community:
 
-- [**3rd_training_lua**](https://github.com/Grouflon/3rd_training_lua) by Grouflon — Multi-character training mode framework for FBNeo. Provided the memory address map, drawing conventions, and resource management patterns used throughout this script.
-- [**SF3 3rd Strike Trial Script**](https://ameblo.jp/3fv/entry-12747992757.html) by 3fv — Combo trial system that established the action ID format and hit detection approach adapted here for exercise sequence matching.
+- [**3rd_training_lua**](https://github.com/Grouflon/3rd_training_lua) by Grouflon — memory map, drawing conventions, resource management
+- [**SF3 3rd Strike Trial Script**](https://ameblo.jp/3fv/entry-12747992757.html) by 3fv — action ID format and hit detection approach
 
-## How to Contribute
+## Contributing
 
-### Reporting Issues
+### Add exercises (easiest way to help)
 
-Open an issue on GitHub with:
-- What you were doing (which exercise, which opponent, etc.)
-- What happened vs what you expected
-- Any error messages from the FBNeo Lua console
+1. Record a combo with **Coin**
+2. Test that it detects reliably
+3. Clean up the name and hint in `urien_lab_exercises.txt`
+4. Submit a PR
 
-### Adding Exercises
+### Add missing moves
 
-The easiest way to contribute is to add new exercise definitions:
+If the tracker shows `spc?XXXX` or `atk?XXXX`, that move isn't in the database yet.
 
-1. Use the record-to-exercise system (Coin) to capture a combo
-2. Test that it works reliably
-3. Edit `urien_lab_exercises.txt` to clean up the name, hint, and category
-4. Submit a PR adding your exercise definitions
+1. Turn on debug (Alt+4) and do the move
+2. Note the action string (e.g., `S003e003e`)
+3. Add it to the `MOVES` table in `urien_lab.lua`
+4. Submit a PR
 
-### Adding Moves to the Database
+### Code changes
 
-If the combo tracker shows `spc?XXXX` or `atk?XXXX` for a move, that action ID is missing from the `MOVES` table. To add it:
+1. Fork and branch
+2. Edit `urien_lab.lua` (single file, no `require`)
+3. Test in FBNeo — check exercises and save/load still work
+4. Open a PR
 
-1. Enable debug display (Alt+4) and perform the move
-2. Note the action string shown (e.g., `S003e003e`)
-3. Add an entry to the `MOVES` table in `urien_lab.lua`:
-   ```lua
-   ["MoveName"] = { action_ids = {"S003e003e"}, type = "special", sf = "qcf+LP", numpad = "236LP" },
-   ```
-4. Submit a PR with the new entry
-
-### Code Changes
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-change`)
-3. Make your changes to `urien_lab.lua`
-4. Test in FBNeo with the `sfiii3` ROM — verify exercises still work, save/load still works, and your feature behaves correctly
-5. Submit a pull request with a description of what changed and why
-
-**Key things to keep in mind:**
-- The script is a single file by design (FBNeo Lua limitation — no `require`)
-- Memory writes that need to persist must go in `gui.register()`, not `emu.registerbefore()`
-- Action IDs use the format `prefix + sub(4hex) + id(4hex)` for S/A types, or `prefix + id(4hex)` for F types
-- All colors are RRGGBBAA format (FBNeo convention)
-- Test both the character select flow and exercise execution after any change
+See `CLAUDE.md` for technical conventions (memory write timing, action ID format, color format).
 
 ## License
 
-This project is provided as-is for the fighting game community. See the repository for license details.
+Provided as-is for the fighting game community.
