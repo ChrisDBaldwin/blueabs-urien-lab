@@ -30,7 +30,7 @@ On first launch, if `character_select.fs` is missing, fetch it from voidtalker.c
 
 ## Future Features
 
-- **Defensive exercises** — parry training with recorded attack playback
-- **Matchup-specific curriculum** — punish exercises per opponent
-- **Multi-character support** — abstract character-specific parts (moves, exercises, charge)
+- **Defensive exercises** — parry category exists, but needs recorded attack playback so the dummy performs a sequence for the player to parry
+- **Matchup-specific curriculum** — punish exercises per opponent (opponent tagging is in place, content is missing)
+- **Multi-character support** — abstract character-specific parts (moves, exercises, charge meters)
 - **Community exercise exchange** — submit, curate, distribute

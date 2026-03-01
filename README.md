@@ -10,7 +10,7 @@ Learn Urien combos step by step — from basic confirms through tackle loops to 
 - **Record your own** — Press Coin to capture a combo, and it becomes a playable exercise with auto-detected notation
 - **Per-opponent save states** — Save and load match states for each of the 19 characters
 - **Live combo tracker** — See move names in real time during free practice
-- **Charge meters** — Live 4-6 and 2-8 charge bars with decay timers so you can see when your charge is ready
+- **Charge meters** — Live charge bars with decay timers (b-f/d-u or 4-6/2-8 depending on notation mode)
 - **Training mode always on** — Infinite timer, full meter, stun cleared, HP recovers after combos drop
 - **Aegis multi-combo support** — Exercises that span multiple combo sequences (counter resets between parts)
 - **Dual notation** — Street Fighter (`b~f+MK`) or numpad (`[4]6MK`)

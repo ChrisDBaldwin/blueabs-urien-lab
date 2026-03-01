@@ -1700,8 +1700,10 @@ local function draw_charge_meters()
         end
     end
     local x, y = 320, 170
-    gauge("4-6", x, y, MEM.charge_h_value, MEM.charge_h_timer)
-    gauge("2-8", x, y + 8, MEM.charge_v_value, MEM.charge_v_timer)
+    local h_label = notation_mode == NOTATION_NUMPAD and "4-6" or "b-f"
+    local v_label = notation_mode == NOTATION_NUMPAD and "2-8" or "d-u"
+    gauge(h_label, x, y, MEM.charge_h_value, MEM.charge_h_timer)
+    gauge(v_label, x, y + 8, MEM.charge_v_value, MEM.charge_v_timer)
 end
 
 --- Draw the character select screen
