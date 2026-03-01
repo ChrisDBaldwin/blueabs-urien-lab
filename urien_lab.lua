@@ -34,7 +34,7 @@
 -- [1] CONSTANTS & CONFIG
 -- ============================================================================
 
-local SCRIPT_VERSION = "0.5.0"
+local SCRIPT_VERSION = "0.5.1"
 local SAVE_FILE = "urien_lab_save.txt"
 local CAPTURE_FILE = "captured_exercises.txt"
 local MATCHUP_FILE = "urien_lab_matchups.txt"
@@ -340,14 +340,16 @@ local filtered_exercises = {}      -- indices into exercises[] for current oppon
 local filter_active = false     -- true when filtering by opponent
 
 -- Secret: Konami code enables turbo charge (continuous charge fill during exercises)
-local turbo_charge = false
-local turbo_flash_timer = 0
-local konami_sequence = {
-    "P1 Up", "P1 Up", "P1 Down", "P1 Down",
-    "P1 Left", "P1 Right", "P1 Left", "P1 Right",
-    "P1 Start",
+local konami = {
+    active = false,
+    flash_timer = 0,
+    index = 1,
+    sequence = {
+        "P1 Up", "P1 Up", "P1 Down", "P1 Down",
+        "P1 Left", "P1 Right", "P1 Left", "P1 Right",
+        "P1 Start",
+    },
 }
-local konami_index = 1
 
 -- Temp slot used for all save/load operations (file gets renamed to descriptive name)
 local TEMP_SLOT = 99999
@@ -797,8 +799,8 @@ local function manage_resources(exercise)
         fill_meter_full()
     end
 
-    -- Keep charge ready only if turbo_charge secret is active
-    if turbo_charge then
+    -- Keep charge ready only if turbo charge secret is active
+    if konami.active then
         if setup.fill_h_charge then fill_h_charge() end
         if setup.fill_v_charge then fill_v_charge() end
     end
@@ -3023,19 +3025,19 @@ local function is_held(btn)
 end
 
 local function check_konami()
-    local expected = konami_sequence[konami_index]
+    local expected = konami.sequence[konami.index]
     if is_pressed(expected) then
-        konami_index = konami_index + 1
-        if konami_index > #konami_sequence then
-            turbo_charge = not turbo_charge
-            turbo_flash_timer = 180
-            konami_index = 1
+        konami.index = konami.index + 1
+        if konami.index > #konami.sequence then
+            konami.active = not konami.active
+            konami.flash_timer = 180
+            konami.index = 1
         end
     else
         -- Any other button press resets the sequence
-        for _, btn in ipairs(konami_sequence) do
+        for _, btn in ipairs(konami.sequence) do
             if is_pressed(btn) and btn ~= expected then
-                konami_index = 1
+                konami.index = 1
                 break
             end
         end
@@ -3445,10 +3447,10 @@ local function on_gui()
     end
 
     -- Turbo charge flash message
-    if turbo_flash_timer > 0 then
-        turbo_flash_timer = turbo_flash_timer - 1
-        local msg = turbo_charge and "TURBO CHARGE ON" or "TURBO CHARGE OFF"
-        local color = turbo_charge and COLOR.text_green or COLOR.text_gray
+    if konami.flash_timer > 0 then
+        konami.flash_timer = konami.flash_timer - 1
+        local msg = konami.active and "TURBO CHARGE ON" or "TURBO CHARGE OFF"
+        local color = konami.active and COLOR.text_green or COLOR.text_gray
         draw_text(SCREEN_W / 2 - 30, SCREEN_H - 16, msg, color)
     end
 end
