@@ -6,14 +6,10 @@ reference/
 
 # Save states (binary, user-specific)
 *.fs
+!character_select.fs
 
 # User data files (progression, captures, character metadata)
-urien_lab_save.txt
-urien_lab_characters.txt
-urien_lab_matchups.txt
-urien_lab_custom.txt
-captured_drills.txt
-captured_exercises.txt
+
 
 # Temp files from update downloads
 *.tmp
