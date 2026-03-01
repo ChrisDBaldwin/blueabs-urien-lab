@@ -44,14 +44,15 @@ local SCREEN_W = 384
 local SCREEN_H = 224
 
 -- Timing
-local SETUP_DELAY_FRAMES = 30       -- Pause after positioning before exercise goes active
+local SETUP_DELAY_FRAMES = 0        -- Instant transition from SETUP to ACTIVE
 local SUCCESS_DISPLAY_FRAMES = 120   -- Show "CLEAR!" for 2 seconds
-local FAIL_DISPLAY_FRAMES = 90       -- Show failure for 1.5 seconds
+local FAIL_DISPLAY_FRAMES = 150      -- Show failure for 2.5 seconds (timing feedback needs more read time)
 
 -- Resource recovery
 local RECOVERY_DELAY_FRAMES = 20     -- Frames after combo drops before HP starts recovering
 local LIFE_RECOVERY_SPEED = 8        -- HP units per frame during recovery
 local LIFE_FULL = 0xA0               -- Full HP value
+local STUN_RESET_DELAY_FRAMES = 40   -- Frames after combo drops before stun resets
 
 -- Mastery
 local MASTERY_THRESHOLD = 3          -- Completions needed to master an exercise
@@ -90,6 +91,10 @@ local CATEGORY_LABELS = {
     parry = "PARRY",
 }
 
+-- Timing feedback thresholds (frames from reference)
+local TIMING_TIGHT = 3   -- <=3f from reference = green
+local TIMING_OK = 8      -- <=8f = yellow, >8f = orange/red
+
 -- Corner detection
 local STAGE_LEFT = 0x0040
 local STAGE_RIGHT = 0x01C0
@@ -119,6 +124,10 @@ local COLOR = {
     menu_top     = 0x0A0A12FF,   -- fully opaque dark, menu gradient top
     menu_bottom  = 0x14141EFF,   -- fully opaque slightly lighter, menu gradient bottom
     text_outline = 0x101008FF,   -- dark outline for all text (matches Grouflon convention)
+    -- Timing feedback
+    timing_tight   = 0x00FF00FF,  -- green: within TIMING_TIGHT frames
+    timing_ok      = 0xFFFF00FF,  -- yellow: within TIMING_OK frames
+    timing_loose   = 0xFF8800FF,  -- orange: beyond TIMING_OK frames
 }
 
 -- Notation mode
@@ -744,22 +753,6 @@ end
 
 local function apply_exercise_setup(exercise)
     local setup = exercise.setup
-    local side = get_exercise_side(exercise.id)
-    local p1_x = setup.p1_x
-    local p2_x = setup.p2_x
-    if side == "R" then
-        -- Mirror positions: STAGE_LEFT + STAGE_RIGHT = 0x0200
-        p1_x = 0x0200 - setup.p1_x
-        p2_x = 0x0200 - setup.p2_x
-        -- Set facing: P1 faces left, P2 faces right
-        memory.writebyte(MEM.p1_flip, 1)
-        memory.writebyte(MEM.p2_flip, 0)
-    else
-        memory.writebyte(MEM.p1_flip, 0)
-        memory.writebyte(MEM.p2_flip, 1)
-    end
-    set_player_pos(1, p1_x)
-    set_player_pos(2, p2_x)
     set_life(1, setup.p1_life)
     set_life(2, setup.p2_life)
     if setup.meter == "full" then
@@ -774,8 +767,9 @@ local function apply_exercise_setup(exercise)
     reset_hit_tracking()
 end
 
---- Resource management: delayed HP recovery, stun reset, meter refill
+--- Resource management: delayed HP recovery, delayed stun reset, meter refill
 local recovery_timer = 0  -- counts up after combo drops
+local stun_reset_timer = 0  -- counts up after combo drops, resets stun after delay
 
 reset_stun = function()
     -- Zero P2 stun bar so dummy doesn't get dizzy
@@ -788,9 +782,6 @@ local function manage_resources(exercise)
     if not exercise then return end
     local setup = exercise.setup
 
-    -- Always keep stun clear
-    reset_stun()
-
     -- Always keep meter full (needed for EX/super exercises)
     if setup.meter == "full" then
         fill_meter_full()
@@ -800,9 +791,10 @@ local function manage_resources(exercise)
     if setup.fill_h_charge then fill_h_charge() end
     if setup.fill_v_charge then fill_v_charge() end
 
-    -- HP recovery: if combo counter is 0 (no active combo), recover after delay
+    -- HP and stun recovery: delayed reset after combo drops
     if game_state.combo_counter == 0 then
         recovery_timer = recovery_timer + 1
+        stun_reset_timer = stun_reset_timer + 1
         if recovery_timer > RECOVERY_DELAY_FRAMES then
             -- Rapidly recover both players' HP
             local p1_hp = memory.readbyte(MEM.p1_life)
@@ -816,9 +808,13 @@ local function manage_resources(exercise)
                 memory.writebyte(MEM.p2_life, p2_hp)
             end
         end
+        if stun_reset_timer > STUN_RESET_DELAY_FRAMES then
+            reset_stun()
+        end
     else
-        -- Combo is active, reset the recovery timer
+        -- Combo is active, reset the recovery timers
         recovery_timer = 0
+        stun_reset_timer = 0
         -- But always keep P2 alive during combos so the round doesn't end
         if memory.readbyte(MEM.p2_life) < 0x10 then
             memory.writebyte(MEM.p2_life, 0x10)
@@ -841,6 +837,23 @@ local engine = {
     fail_reason = "",
     last_hit_waza = "",
     projectile_hit_id = nil,
+
+    -- Timing tracking
+    step_frames = {},          -- frame when each step was hit
+    active_start_frame = 0,    -- frame when ACTIVE began
+    last_hit_frame = 0,        -- frame of most recent hit
+
+    -- Hit deduplication: prevent multi-frame counter/waza noise from
+    -- double-counting consecutive moves with the same action ID
+    last_match_action = "",        -- action string at last matched step
+    action_changed_since_match = true,  -- has action string changed since last match?
+
+    -- Fail diagnostics
+    fail_step_index = 0,       -- which step failed
+    fail_type = "",            -- "drop" | "timeout"
+    fail_gap = 0,              -- actual frame gap at failure point
+    fail_ref_gap = 0,          -- reference gap (0 if unknown)
+    fail_last_action = "",     -- what move player was in at fail
 
     -- Stats for current session
     session_attempts = 0,
@@ -914,6 +927,16 @@ local function select_exercise(index)
     engine.fail_reason = ""
     engine.last_hit_waza = ""
     engine.projectile_hit_id = nil
+    engine.step_frames = {}
+    engine.active_start_frame = 0
+    engine.last_hit_frame = 0
+    engine.last_match_action = ""
+    engine.action_changed_since_match = true
+    engine.fail_step_index = 0
+    engine.fail_type = ""
+    engine.fail_gap = 0
+    engine.fail_ref_gap = 0
+    engine.fail_last_action = ""
     engine.session_attempts = 0
     engine.session_completions = 0
 end
@@ -927,6 +950,16 @@ local function reset_exercise()
     engine.fail_reason = ""
     engine.last_hit_waza = ""
     engine.projectile_hit_id = nil
+    engine.step_frames = {}
+    engine.active_start_frame = 0
+    engine.last_hit_frame = 0
+    engine.last_match_action = ""
+    engine.action_changed_since_match = true
+    engine.fail_step_index = 0
+    engine.fail_type = ""
+    engine.fail_gap = 0
+    engine.fail_ref_gap = 0
+    engine.fail_last_action = ""
 end
 
 local function engine_setup_update()
@@ -941,6 +974,8 @@ local function engine_setup_update()
     engine.setup_timer = engine.setup_timer - 1
     if engine.setup_timer <= 0 then
         engine.state = STATE_ACTIVE
+        engine.active_start_frame = game_state.frame_count
+        engine.last_hit_frame = game_state.frame_count
         reset_hit_tracking()
     end
 end
@@ -970,8 +1005,17 @@ local function engine_active_update()
     -- finished the sequence, that's a drop (skip for multi-combo exercises like Aegis setups)
     if not ex.allow_combo_reset and engine.combo_index > 1 and game_state.combo_counter == 0 and game_state.combo_counter_prev > 0 then
         engine.state = STATE_FAIL
-        engine.fail_reason = "Combo dropped at: " .. current_step.name
         engine.result_timer = FAIL_DISPLAY_FRAMES
+
+        -- Structured fail diagnostics
+        engine.fail_step_index = engine.combo_index
+        engine.fail_type = "drop"
+        engine.fail_gap = game_state.frame_count - engine.last_hit_frame
+        engine.fail_ref_gap = (ex.ref_timing and ex.ref_timing[engine.combo_index]) or 0
+        engine.fail_last_action = lookup_move_name(game_state.p1.action_string) or game_state.p1.action_string
+
+        -- Backward-compat fail_reason
+        engine.fail_reason = "Combo dropped at: " .. current_step.name
         return
     end
 
@@ -979,6 +1023,8 @@ local function engine_active_update()
     if current_step.hit_type == "F" then
         local proj_hit = scan_projectile_hits(current_step.action_ids)
         if proj_hit and table_contains(current_step.action_ids, proj_hit) then
+            engine.step_frames[engine.combo_index] = game_state.frame_count
+            engine.last_hit_frame = game_state.frame_count
             engine.combo_index = engine.combo_index + 1
             if engine.combo_index == 2 and not engine.attempt_started then
                 engine.attempt_started = true
@@ -989,7 +1035,15 @@ local function engine_active_update()
         end
     else
         -- Check for normal/special hits (H-type moves)
-        -- Detect new hit: combo counter increased OR waza_total changed
+        -- Track whether the action string has changed since the last matched
+        -- step.  Multi-hit normals (cr.HP = 2 hits) and multi-frame counter/
+        -- waza noise can cause spurious new_hit signals while the player is
+        -- still in the same move.  Requiring the action to change first
+        -- ensures each step corresponds to a genuinely new move input.
+        if game_state.p1.action_string ~= engine.last_match_action then
+            engine.action_changed_since_match = true
+        end
+
         local new_hit = false
         if game_state.combo_counter > game_state.combo_counter_prev and game_state.combo_counter > 0 then
             new_hit = true
@@ -997,13 +1051,17 @@ local function engine_active_update()
             new_hit = true
         end
 
-        if new_hit then
+        if new_hit and engine.action_changed_since_match then
             local hit_waza = game_state.p1.action_string
             engine.last_hit_waza = hit_waza
 
             -- Check if this hit matches any of the expected action IDs
             for _, expected_id in ipairs(current_step.action_ids) do
                 if hit_waza == expected_id then
+                    engine.step_frames[engine.combo_index] = game_state.frame_count
+                    engine.last_hit_frame = game_state.frame_count
+                    engine.last_match_action = hit_waza
+                    engine.action_changed_since_match = false
                     engine.combo_index = engine.combo_index + 1
                     if engine.combo_index == 2 and not engine.attempt_started then
                         engine.attempt_started = true
@@ -1065,6 +1123,57 @@ local function engine_update()
             manage_resources(engine.current_exercise)
         end
     end
+end
+
+--- Compute timing summary for completed steps
+--- Returns array of {name, actual_gap, ref_gap, delta, rating} per completed step
+local function compute_timing_summary()
+    local ex = engine.current_exercise
+    if not ex then return {} end
+
+    local seq = ex.sequence
+    local summary = {}
+
+    for i = 1, math.min(engine.combo_index - 1, #seq) do
+        local entry = { name = seq[i].name, actual_gap = 0, ref_gap = 0, delta = 0, rating = "tight" }
+
+        if i == 1 then
+            -- First step has no predecessor gap
+            entry.actual_gap = 0
+            entry.ref_gap = 0
+            entry.delta = 0
+            entry.rating = "tight"
+        elseif engine.step_frames[i] and engine.step_frames[i - 1] then
+            entry.actual_gap = engine.step_frames[i] - engine.step_frames[i - 1]
+            entry.ref_gap = (ex.ref_timing and ex.ref_timing[i]) or 0
+
+            if entry.ref_gap > 0 then
+                entry.delta = entry.actual_gap - entry.ref_gap
+                local abs_delta = math.abs(entry.delta)
+                if abs_delta <= TIMING_TIGHT then
+                    entry.rating = "tight"
+                elseif abs_delta <= TIMING_OK then
+                    entry.rating = "ok"
+                else
+                    entry.rating = "loose"
+                end
+            else
+                entry.delta = 0
+                entry.rating = "tight"  -- no reference = no judgment
+            end
+        end
+
+        table.insert(summary, entry)
+    end
+
+    return summary
+end
+
+--- Get color for a timing rating
+local function timing_color(rating)
+    if rating == "tight" then return COLOR.timing_tight end
+    if rating == "ok" then return COLOR.timing_ok end
+    return COLOR.timing_loose
 end
 
 --- Combo tracker update: runs every frame, independent of exercise engine and capture
@@ -1678,7 +1787,10 @@ local function draw_info_bar()
     -- Notation line
     draw_text(4, bar_y + 2, "DO: " .. get_notation(ex), COLOR.text_white)
 
-    -- Step indicator with colored markers
+    -- Pre-compute timing summary for completed steps
+    local summary = compute_timing_summary()
+
+    -- Step indicator with colored markers and timing annotations
     local step_str = "Step: "
     local step_x = 4
     draw_text(step_x, bar_y + 12, step_str, COLOR.text_gray)
@@ -1696,10 +1808,33 @@ local function draw_info_bar()
 
         local bracket_l = (i == engine.combo_index) and "[" or ""
         local bracket_r = (i == engine.combo_index) and "]" or ""
+
+        -- Build timing annotation for completed steps with reference timing
+        local timing_str = ""
+        if i < engine.combo_index and i > 1 and summary[i] and summary[i].ref_gap > 0 then
+            local delta = summary[i].delta
+            local sign = delta >= 0 and "+" or ""
+            timing_str = "(" .. sign .. delta .. "f)"
+        end
+
         local separator = (i < #seq) and " > " or ""
 
-        draw_text(step_x, bar_y + 12, bracket_l .. step.name .. bracket_r .. separator, color)
-        step_x = step_x + (#bracket_l + #step.name + #bracket_r + #separator) * 4
+        -- Draw step name
+        draw_text(step_x, bar_y + 12, bracket_l .. step.name .. bracket_r, color)
+        step_x = step_x + (#bracket_l + #step.name + #bracket_r) * 4
+
+        -- Draw timing annotation in color
+        if timing_str ~= "" then
+            local tc = timing_color(summary[i].rating)
+            draw_text(step_x, bar_y + 12, timing_str, tc)
+            step_x = step_x + #timing_str * 4
+        end
+
+        -- Draw separator
+        if separator ~= "" then
+            draw_text(step_x, bar_y + 12, separator, color)
+            step_x = step_x + #separator * 4
+        end
     end
 
     -- Attempt counter
@@ -1721,39 +1856,147 @@ local function draw_info_bar()
     end
 end
 
+--- Build timing strip string for completed steps (used in both success and fail banners)
+local function draw_timing_strip(x, y, summary, fail_step)
+    local sx = x
+    for i, s in ipairs(summary) do
+        local name_color = COLOR.step_done
+        draw_text(sx, y, s.name, name_color)
+        sx = sx + #s.name * 4
+
+        -- Show timing delta for steps after the first (if reference exists)
+        if i > 1 and s.ref_gap > 0 then
+            local sign = s.delta >= 0 and "+" or ""
+            local delta_str = "(" .. sign .. s.delta .. "f)"
+            draw_text(sx, y, delta_str, timing_color(s.rating))
+            sx = sx + #delta_str * 4
+        end
+
+        -- Separator
+        if i < #summary or fail_step then
+            draw_text(sx, y, " > ", COLOR.text_gray)
+            sx = sx + 12
+        end
+    end
+
+    -- Show failed step if provided
+    if fail_step then
+        local fail_mark = "X" .. fail_step
+        draw_text(sx, y, fail_mark, COLOR.text_red)
+    end
+end
+
 --- Draw success/fail banner
 local function draw_result_banner()
     if engine.state == STATE_SUCCESS then
-        local banner_y = SCREEN_H / 2 - 15
-        draw_box(SCREEN_W / 4, banner_y, SCREEN_W / 2, 30, COLOR.bg_success, COLOR.step_done)
+        local ex = engine.current_exercise
+        local summary = compute_timing_summary()
+        local has_timing = false
+        for _, s in ipairs(summary) do
+            if s.ref_gap > 0 then has_timing = true; break end
+        end
+
+        -- Banner height: base 30 + timing line if available + streak line
+        local banner_h = 30
+        if has_timing then banner_h = banner_h + 12 end
+        if current_streak > 1 then banner_h = banner_h + 10 end
+
+        local banner_y = SCREEN_H / 2 - banner_h / 2
+        local bx = SCREEN_W / 4
+        local bw = SCREEN_W / 2
+        draw_box(bx, banner_y, bw, banner_h, COLOR.bg_success, COLOR.step_done)
+
+        -- Line 1: CLEAR!
         draw_text(SCREEN_W / 2 - 20, banner_y + 4, "CLEAR!", COLOR.text_green)
 
-        local prog = progression[engine.current_exercise.id]
+        -- Line 2: Progression
+        local line_y = banner_y + 16
+        local prog = progression[ex.id]
         if prog then
             local comp_str = prog.completions .. "/" .. MASTERY_THRESHOLD
             if prog.mastered then
                 comp_str = comp_str .. " MASTERED!"
             end
-            draw_text(SCREEN_W / 2 - 24, banner_y + 16, comp_str, COLOR.text_white)
+            draw_text(SCREEN_W / 2 - 24, line_y, comp_str, COLOR.text_white)
+            line_y = line_y + 12
         end
 
+        -- Line 3: Timing deltas (if reference timing exists)
+        if has_timing then
+            local timing_x = bx + 4
+            draw_text(timing_x, line_y, "Timing: ", COLOR.text_gray)
+            local tx = timing_x + 32
+            for i, s in ipairs(summary) do
+                if i > 1 and s.ref_gap > 0 then
+                    local sign = s.delta >= 0 and "+" or ""
+                    local delta_str = sign .. s.delta .. "f"
+                    draw_text(tx, line_y, delta_str, timing_color(s.rating))
+                    tx = tx + (#delta_str + 1) * 4
+                end
+            end
+            line_y = line_y + 10
+        end
+
+        -- Line 4: Streak
         if current_streak > 1 then
-            draw_text(SCREEN_W / 2 - 20, banner_y + 26, "Streak: " .. current_streak, COLOR.text_yellow)
+            draw_text(SCREEN_W / 2 - 20, line_y, "Streak: " .. current_streak, COLOR.text_yellow)
         end
 
     elseif engine.state == STATE_FAIL then
-        local banner_y = SCREEN_H / 2 - 10
-        draw_box(SCREEN_W / 4, banner_y, SCREEN_W / 2, 20, COLOR.bg_fail, COLOR.text_red)
-        draw_text(SCREEN_W / 4 + 4, banner_y + 6, engine.fail_reason, COLOR.text_red)
+        local ex = engine.current_exercise
+        local summary = compute_timing_summary()
+
+        -- Calculate banner height based on content
+        local banner_h = 14  -- Line 1: dropped message
+        banner_h = banner_h + 10  -- Line 2: timing info
+        if #summary > 0 then banner_h = banner_h + 10 end  -- Line 3: step strip
+        banner_h = banner_h + 4  -- padding
+
+        local banner_y = SCREEN_H / 2 - banner_h / 2
+        local bx = SCREEN_W / 4 - 20
+        local bw = SCREEN_W / 2 + 40
+        draw_box(bx, banner_y, bw, banner_h, COLOR.bg_fail, COLOR.text_red)
+
+        local line_y = banner_y + 4
+
+        -- Line 1: DROPPED at step N: [move_name]
+        local step_name = ""
+        if ex and ex.sequence and engine.fail_step_index > 0 and engine.fail_step_index <= #ex.sequence then
+            step_name = ex.sequence[engine.fail_step_index].name
+        end
+        local drop_msg = string.format("DROPPED at step %d: %s", engine.fail_step_index, step_name)
+        draw_text(bx + 4, line_y, drop_msg, COLOR.text_red)
+        line_y = line_y + 10
+
+        -- Line 2: Timing delta or raw gap
+        if engine.fail_ref_gap > 0 then
+            local delta = engine.fail_gap - engine.fail_ref_gap
+            local direction = delta >= 0 and "LATE" or "EARLY"
+            local abs_delta = math.abs(delta)
+            local delta_color
+            if abs_delta <= TIMING_TIGHT then delta_color = COLOR.timing_tight
+            elseif abs_delta <= TIMING_OK then delta_color = COLOR.timing_ok
+            else delta_color = COLOR.timing_loose end
+            draw_text(bx + 4, line_y, direction .. " by " .. abs_delta .. "f", delta_color)
+        else
+            draw_text(bx + 4, line_y, "Gap: " .. engine.fail_gap .. "f", COLOR.text_yellow)
+        end
+        -- Show what move player was doing
+        if engine.fail_last_action ~= "" then
+            draw_text(bx + 100, line_y, "(was: " .. engine.fail_last_action .. ")", COLOR.text_gray)
+        end
+        line_y = line_y + 10
+
+        -- Line 3: Step timing strip
+        if #summary > 0 then
+            draw_timing_strip(bx + 4, line_y, summary, step_name)
+        end
     end
 end
 
 --- Draw setup countdown
 local function draw_setup_overlay()
-    if engine.state == STATE_SETUP then
-        local s = math.ceil(engine.setup_timer / 30)
-        draw_text(SCREEN_W / 2 - 16, SCREEN_H / 2, "Ready... " .. s, COLOR.text_yellow)
-    end
+    -- Intentionally empty: no "Ready" countdown overlay
 end
 
 --- Draw the exercise selection menu
@@ -1927,9 +2170,17 @@ local function draw_menu()
     local char_label = selected_opponent and ("vs " .. selected_opponent.name) or "Character"
     local tab_char_color = (menu_mode == MENU_CHAR_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
     local tab_opp_color = (menu_mode == MENU_OPPONENT) and COLOR.text_yellow or COLOR.text_gray
-    draw_text(menu_x + 4, menu_y + 2, "[All]", tab_all_color)
-    draw_text(menu_x + 22, menu_y + 2, "[" .. char_label .. "]", tab_char_color)
-    draw_text(menu_x + menu_w - 48, menu_y + 2, "[Opponent]", tab_opp_color)
+    local all_label = "[All]"
+    local char_label_full = "[" .. char_label .. "]"
+    local opp_label = "[Select Opponent]"
+    local tab_cw = 4
+    local tab_gap = 4
+    local x_all = menu_x + 4
+    local x_char = x_all + #all_label * tab_cw + tab_gap
+    local x_opp = x_char + #char_label_full * tab_cw + tab_gap
+    draw_text(x_all, menu_y + 2, all_label, tab_all_color)
+    draw_text(x_char, menu_y + 2, char_label_full, tab_char_color)
+    draw_text(x_opp, menu_y + 2, opp_label, tab_opp_color)
 
     if menu_mode == MENU_ALL_EXERCISES then
         draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h,
@@ -2363,6 +2614,7 @@ build_exercise_from_capture = function()
     local notations_sf = {}
     local notations_np = {}
     local move_names = {}
+    local final_frames = {}  -- frame timestamps for surviving entries (for ref_timing)
     local has_h_charge = false
     local has_v_charge = false
     local has_combo_reset = false
@@ -2398,6 +2650,7 @@ build_exercise_from_capture = function()
                         hit_type = entry.hit_type,
                         action_ids = { entry.action_id },
                     })
+                    table.insert(final_frames, entry.frame)
                     table.insert(notations_sf, sf)
                     table.insert(notations_np, numpad)
                     table.insert(move_names, move_name)
@@ -2423,6 +2676,7 @@ build_exercise_from_capture = function()
                         hit_type = "H",
                         action_ids = { entry.action_id },
                     })
+                    table.insert(final_frames, entry.frame)
                     table.insert(notations_sf, sf_str)
                     table.insert(notations_np, np_str)
                     table.insert(move_names, display_name)
@@ -2434,6 +2688,7 @@ build_exercise_from_capture = function()
                         hit_type = "F",
                         action_ids = { entry.action_id },
                     })
+                    table.insert(final_frames, entry.frame)
                     table.insert(notations_sf, display_name)
                     table.insert(notations_np, display_name)
                     table.insert(move_names, display_name)
@@ -2498,6 +2753,15 @@ build_exercise_from_capture = function()
         new_exercise.allow_combo_reset = true
     end
 
+    -- Auto-populate reference timing from captured frame data
+    if #final_frames >= 2 then
+        local ref_timing = {0}
+        for i = 2, #final_frames do
+            ref_timing[i] = final_frames[i] - final_frames[i - 1]
+        end
+        new_exercise.ref_timing = ref_timing
+    end
+
     -- Auto-tag with current opponent
     if selected_opponent then
         new_exercise.characters = { selected_opponent.name }
@@ -2550,6 +2814,14 @@ local function write_exercise(f, exercise)
     -- Multi-combo reset flag (Aegis setups)
     if exercise.allow_combo_reset then
         f:write("RESETOK:1\n")
+    end
+    -- Reference timing (frame gaps between steps)
+    if exercise.ref_timing and #exercise.ref_timing > 0 then
+        local timing_parts = {}
+        for _, t in ipairs(exercise.ref_timing) do
+            table.insert(timing_parts, tostring(t))
+        end
+        f:write("TIMING:" .. table.concat(timing_parts, ",") .. "\n")
     end
     -- Hints
     if exercise.hints and #exercise.hints > 0 then
@@ -2672,6 +2944,11 @@ local function load_exercises_from_file(path, shipped_flag)
                     current.fail = { timeout_frames = tonumber(value) or 600 }
                 elseif key == "RESETOK" then
                     current.allow_combo_reset = (value == "1")
+                elseif key == "TIMING" then
+                    current.ref_timing = {}
+                    for num_str in value:gmatch("[^,]+") do
+                        table.insert(current.ref_timing, tonumber(num_str) or 0)
+                    end
                 elseif key == "HINT" then
                     current.hints = { value }
                 end
@@ -2909,6 +3186,7 @@ local function handle_menu_input()
         -- Opponent tab
         if is_pressed("P1 Weak Punch") then
             app_state = APP_CHARSELECT
+            charselect_visible = true
             engine.state = STATE_IDLE
             engine.current_exercise = nil
             show_menu = false
@@ -3074,11 +3352,11 @@ local function on_gui()
         -- Freeze round timer (infinite time)
         memory.writebyte(MEM.round_timer, 100)
 
-        -- Always-on training resources: delayed HP recovery, stun reset, meter full
-        reset_stun()
+        -- Always-on training resources: delayed HP/stun recovery, meter full
         fill_meter_full()
         if game_state.combo_counter == 0 then
             recovery_timer = recovery_timer + 1
+            stun_reset_timer = stun_reset_timer + 1
             if recovery_timer > RECOVERY_DELAY_FRAMES then
                 local p1_hp = memory.readbyte(MEM.p1_life)
                 local p2_hp = memory.readbyte(MEM.p2_life)
@@ -3089,8 +3367,12 @@ local function on_gui()
                     memory.writebyte(MEM.p2_life, math.min(p2_hp + LIFE_RECOVERY_SPEED, LIFE_FULL))
                 end
             end
+            if stun_reset_timer > STUN_RESET_DELAY_FRAMES then
+                reset_stun()
+            end
         else
             recovery_timer = 0
+            stun_reset_timer = 0
             -- Keep P2 alive during combos
             if memory.readbyte(MEM.p2_life) < 0x10 then
                 memory.writebyte(MEM.p2_life, 0x10)
