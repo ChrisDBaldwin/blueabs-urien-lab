@@ -770,11 +770,9 @@ local function apply_exercise_setup(exercise)
     if setup.meter == "full" then
         fill_meter_full()
     end
-    if setup.fill_h_charge then
-        fill_h_charge()
-    end
-    if setup.fill_v_charge then
-        fill_v_charge()
+    if konami.active then
+        if setup.fill_h_charge then fill_h_charge() end
+        if setup.fill_v_charge then fill_v_charge() end
     end
     reset_hit_tracking()
 end
