@@ -1,0 +1,43 @@
+# Urien Lab Custom Exercises
+# Your captured and custom exercises (not overwritten by updates)
+# CATEGORY: combo | unblockable | sequence | parry
+---
+ID:c_01
+NAME:cr.HP > M.Tackle > M.Headbutt
+NOTATION_SF:d+HP, b~f+MK, d~u+MK
+NOTATION_NP:2HP, [4]6MK, [2]8MK
+DIFFICULTY:3
+CATEGORY:combo
+SETUP:60C8,FFFFA0B0,A0,A0,full,1,1,stand,1
+SEQ:cr.HP,H,A00180018|M.Tackle,H,S003b003b|M.Headbutt,H,S002a002a
+SUCCESS:3
+TIMING:0,55,44
+HINT:d+HP -> b~f+MK -> d~u+MK
+---
+---
+ID:c_03
+NAME:cr.HP > M.Tackle > M.Tackle > M.Headbutt
+NOTATION_SF:d+HP, b~f+MK, b~f+MK, d~u+MK
+NOTATION_NP:2HP, [4]6MK, [4]6MK, [2]8MK
+DIFFICULTY:4
+CATEGORY:combo
+CHARS:Ken
+SETUP:70E8,FFFFA09D,A0,A0,full,1,1,stand,1
+SEQ:cr.HP,H,A00180018|M.Tackle,H,S003b003b|M.Tackle,H,S003b003b|M.Headbutt,H,S002a002a
+SUCCESS:4
+TIMING:0,55,46,42
+HINT:d+HP -> b~f+MK -> b~f+MK -> d~u+MK
+---
+---
+ID:c_06
+NAME:st.MP > EX.Headbutt
+NOTATION_SF:MP, d~u+KK
+NOTATION_NP:5MP, [2]8KK
+DIFFICULTY:2
+CATEGORY:combo
+SETUP:70E8,FFFFA0E7,A0,A0,full,0,1,stand,1
+SEQ:st.MP,H,A00030003|EX.Headbutt,H,S002c002c
+SUCCESS:2
+TIMING:0,15
+HINT:MP -> d~u+KK
+---

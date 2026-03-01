@@ -8,8 +8,11 @@ reference/
 *.fs
 !character_select.fs
 
-# User data files (progression, captures, character metadata)
-
+# User-local data (progression, captures, character metadata)
+urien_lab_save.txt
+urien_lab_characters.txt
+urien_lab_matchups.txt
+captured_exercises.txt
 
 # Temp files from update downloads
 *.tmp
