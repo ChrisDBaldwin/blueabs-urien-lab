@@ -128,6 +128,11 @@ local COLOR = {
     timing_tight   = 0x00FF00FF,  -- green: within TIMING_TIGHT frames
     timing_ok      = 0xFFFF00FF,  -- yellow: within TIMING_OK frames
     timing_loose   = 0xFF8800FF,  -- orange: beyond TIMING_OK frames
+    -- Charge meter
+    charge_fill    = 0x0080FFFF,  -- cyan: charge bar fill
+    charge_timer   = 0xFF8000FF,  -- orange: timer bar fill
+    charge_full_border = 0xFEFEFEFF,  -- light gray: fully charged border
+    charge_border  = 0x000000FF,  -- black: bar background/border
 }
 
 -- Notation mode
@@ -271,6 +276,11 @@ local MEM = {
     charge_base     = 0x020259D8,
     -- Urien horizontal charge: charge_base + 0x00
     -- Urien vertical charge:   charge_base + 0x1C AND charge_base + 0x54
+    -- Charge display bytes (pattern: value = base+offset+1, timer = base+offset-1)
+    charge_h_value  = 0x020259D9,  -- H charge (4-6) value byte
+    charge_h_timer  = 0x020259D7,  -- H charge (4-6) timer byte
+    charge_v_value  = 0x020259F5,  -- V charge (2-8) value byte
+    charge_v_timer  = 0x020259F3,  -- V charge (2-8) timer byte
 
     -- Meter
     meter_gauge     = 0x020695B5,  -- byte (gauge fill within current bar)
@@ -1658,6 +1668,40 @@ end
 --- Draw text with a dark outline for readability
 local function draw_text(x, y, text, color)
     gui.text(x, y, text, color, COLOR.text_outline)
+end
+
+--- Draw the two charge meters (4-6 horizontal, 2-8 vertical)
+local function draw_charge_meters()
+    local bar_w, bar_h = 42, 2
+    local function gauge(label, x, y, value_addr, timer_addr)
+        draw_text(x - 16, y, label, COLOR.text_gray)
+        local charge = memory.readbyte(value_addr)
+        local timer = memory.readbyte(timer_addr)
+        -- Charge bar
+        if charge ~= 0xFF then
+            gui.box(x, y, x + bar_w, y + bar_h, COLOR.transparent, COLOR.charge_border)
+            local fill = math.min(charge, bar_w)
+            if fill > 0 then
+                gui.box(x, y, x + fill, y + bar_h, COLOR.charge_fill, COLOR.charge_border)
+            end
+        else
+            gui.box(x, y, x + bar_w, y + bar_h, COLOR.transparent, COLOR.charge_full_border)
+        end
+        -- Timer bar (shows charge decay countdown)
+        y = y + 3
+        if timer ~= 0xFF then
+            gui.box(x, y, x + bar_w, y + bar_h, COLOR.transparent, COLOR.charge_border)
+            local fill = math.min(timer, bar_w)
+            if fill > 0 then
+                gui.box(x, y, x + fill, y + bar_h, COLOR.charge_timer, COLOR.charge_border)
+            end
+        else
+            gui.box(x, y, x + bar_w, y + bar_h, COLOR.transparent, COLOR.charge_border)
+        end
+    end
+    local x, y = 320, 170
+    gauge("4-6", x, y, MEM.charge_h_value, MEM.charge_h_timer)
+    gauge("2-8", x, y + 8, MEM.charge_v_value, MEM.charge_v_timer)
 end
 
 --- Draw the character select screen
@@ -3430,6 +3474,7 @@ local function on_gui()
 
     draw_header()
     draw_combo_tracker()
+    draw_charge_meters()
     draw_info_bar()
     draw_result_banner()
     draw_setup_overlay()
