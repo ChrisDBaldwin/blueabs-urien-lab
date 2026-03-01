@@ -339,6 +339,16 @@ local all_exercises_sorted = {}    -- indices into exercises[], category-sorted,
 local filtered_exercises = {}      -- indices into exercises[] for current opponent (tagged + untagged)
 local filter_active = false     -- true when filtering by opponent
 
+-- Secret: Konami code enables turbo charge (continuous charge fill during exercises)
+local turbo_charge = false
+local turbo_flash_timer = 0
+local konami_sequence = {
+    "P1 Up", "P1 Up", "P1 Down", "P1 Down",
+    "P1 Left", "P1 Right", "P1 Left", "P1 Right",
+    "P1 Start",
+}
+local konami_index = 1
+
 -- Temp slot used for all save/load operations (file gets renamed to descriptive name)
 local TEMP_SLOT = 99999
 
@@ -787,9 +797,11 @@ local function manage_resources(exercise)
         fill_meter_full()
     end
 
-    -- Always keep charge ready
-    if setup.fill_h_charge then fill_h_charge() end
-    if setup.fill_v_charge then fill_v_charge() end
+    -- Keep charge ready only if turbo_charge secret is active
+    if turbo_charge then
+        if setup.fill_h_charge then fill_h_charge() end
+        if setup.fill_v_charge then fill_v_charge() end
+    end
 
     -- HP and stun recovery: delayed reset after combo drops
     if game_state.combo_counter == 0 then
@@ -3010,6 +3022,26 @@ local function is_held(btn)
     return input_current[btn]
 end
 
+local function check_konami()
+    local expected = konami_sequence[konami_index]
+    if is_pressed(expected) then
+        konami_index = konami_index + 1
+        if konami_index > #konami_sequence then
+            turbo_charge = not turbo_charge
+            turbo_flash_timer = 180
+            konami_index = 1
+        end
+    else
+        -- Any other button press resets the sequence
+        for _, btn in ipairs(konami_sequence) do
+            if is_pressed(btn) and btn ~= expected then
+                konami_index = 1
+                break
+            end
+        end
+    end
+end
+
 --- Handle character select input (app-level)
 local function handle_charselect_input()
     -- Start: hide overlay and enter training mode (if a match is loaded)
@@ -3298,6 +3330,7 @@ local function on_frame()
 
     -- ALWAYS read input first, even when not playing, so prev stays in sync
     read_input()
+    check_konami()
     read_game_state()
 
     if app_state == APP_CHARSELECT then
@@ -3409,6 +3442,14 @@ local function on_gui()
         local banner_y = 32
         draw_box(20, banner_y, SCREEN_W - 40, 16, 0x003366D0, COLOR.text_cyan)
         draw_text(24, banner_y + 4, capture_result, COLOR.text_cyan)
+    end
+
+    -- Turbo charge flash message
+    if turbo_flash_timer > 0 then
+        turbo_flash_timer = turbo_flash_timer - 1
+        local msg = turbo_charge and "TURBO CHARGE ON" or "TURBO CHARGE OFF"
+        local color = turbo_charge and COLOR.text_green or COLOR.text_gray
+        draw_text(SCREEN_W / 2 - 30, SCREEN_H - 16, msg, color)
     end
 end
 
