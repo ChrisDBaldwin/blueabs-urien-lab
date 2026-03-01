@@ -33,6 +33,10 @@ The script will auto-load the first available save state and show the character 
 
 ## How to Use
 
+### Quick Load Menu
+1. Press Coin to open menu
+2. Select a character to load save state
+
 ### Save a Match State (once per opponent)
 
 1. Start a match as **Urien** vs any opponent
@@ -40,9 +44,9 @@ The script will auto-load the first available save state and show the character 
 3. Navigate to the opponent with **D-Pad**
 4. Press **Fierce** to save — reload any time with **Jab**
 
-### Practice Exercises
+### Practice Menu
 
-1. Press **Start** to open the exercise menu
+1. In a match press **Start** to open the practice menu
 2. Browse with **Up/Down**, switch tabs with **Left/Right**
 3. Press **Jab** to start an exercise
 4. Perform the combo — the HUD tracks your progress
