@@ -68,10 +68,8 @@ local CHAR_SLOT_BASE = 9000          -- FBNeo savestate slots 9001+
 -- Character select save state (game's native char select screen)
 local CHARSELECT_SAVE = "character_select.fs"
 
--- Character select sequence states
-local CHARSELECT_NONE          = 0  -- Not in character select sequence
-local CHARSELECT_SELECTING     = 1  -- At char select screen, timer frozen
-local CHARSELECT_TRANSITIONING = 2  -- Both locked, fast-forwarding to match
+-- Character select sequence states (inline numbers to save locals)
+-- 0=none, 1=P1 selecting, 2=P2 debounce, 3=P2 selecting, 4=transitioning
 
 -- Exercises (record-to-exercise)
 local EXERCISE_FILE = "urien_lab_exercises.txt"
@@ -303,6 +301,8 @@ local MEM = {
     char_select_timer = 0x020154FB,  -- byte: freeze to prevent timeout
     p1_locked         = 0x020154C6,  -- byte: 0xFF = character locked in
     p2_locked         = 0x020154C8,  -- byte: 0xFF = character locked in
+    p1_select_state   = 0x0201553D,  -- byte: 0-4=selecting, >4=locked (SA chosen)
+    p2_select_state   = 0x02015545,  -- byte: 0-4=selecting, >4=locked (SA chosen)
 }
 
 -- Charge gauge offsets (from charge_base)
@@ -344,7 +344,7 @@ local char_cursor = 1
 local selected_opponent = nil   -- reference to CHARACTERS entry
 local char_states = {}          -- { [char_id] = { saved = bool } }
 local pending_home_load = true  -- auto-load first available save on startup
-local charselect_seq = CHARSELECT_NONE  -- game character select sequence state
+local charselect_seq = 0  -- game character select sequence state
 local all_exercises_sorted = {}    -- indices into exercises[], category-sorted, no opponent filter
 local filtered_exercises = {}      -- indices into exercises[] for current opponent (tagged + untagged)
 local filter_active = false     -- true when filtering by opponent
@@ -738,6 +738,33 @@ end
 
 -- Forward declaration (reset_stun defined later, but needed by freeze_game)
 local reset_stun
+
+-- Forward declarations (input state defined in [12], but needed by swap_inputs)
+local input_current = {}
+local input_prev = {}
+
+--- Swap P1 and P2 inputs so one controller selects both characters
+local function swap_inputs()
+    local inp = input_current
+    joypad.set({
+        ["P1 Up"]    = inp["P2 Up"] or false,    ["P1 Down"]  = inp["P2 Down"] or false,
+        ["P1 Left"]  = inp["P2 Left"] or false,  ["P1 Right"] = inp["P2 Right"] or false,
+        ["P1 Weak Punch"]   = inp["P2 Weak Punch"] or false,
+        ["P1 Medium Punch"] = inp["P2 Medium Punch"] or false,
+        ["P1 Strong Punch"] = inp["P2 Strong Punch"] or false,
+        ["P1 Weak Kick"]    = inp["P2 Weak Kick"] or false,
+        ["P1 Medium Kick"]  = inp["P2 Medium Kick"] or false,
+        ["P1 Strong Kick"]  = inp["P2 Strong Kick"] or false,
+        ["P2 Up"]    = inp["P1 Up"] or false,    ["P2 Down"]  = inp["P1 Down"] or false,
+        ["P2 Left"]  = inp["P1 Left"] or false,  ["P2 Right"] = inp["P1 Right"] or false,
+        ["P2 Weak Punch"]   = inp["P1 Weak Punch"] or false,
+        ["P2 Medium Punch"] = inp["P1 Medium Punch"] or false,
+        ["P2 Strong Punch"] = inp["P1 Strong Punch"] or false,
+        ["P2 Weak Kick"]    = inp["P1 Weak Kick"] or false,
+        ["P2 Medium Kick"]  = inp["P1 Medium Kick"] or false,
+        ["P2 Strong Kick"]  = inp["P1 Strong Kick"] or false,
+    })
+end
 
 local function freeze_game()
     -- Lock ALL inputs so the game effectively freezes during charselect.
@@ -1391,7 +1418,7 @@ end
 --- Start the game character select sequence
 local function start_character_select()
     if not load_charselect_save() then return false end
-    charselect_seq = CHARSELECT_SELECTING
+    charselect_seq = 1  -- P1 selecting
     app_state = APP_CHARSELECT
     charselect_visible = false  -- hide script overlay, show game's native screen
     print("[Urien Lab] Character select -- pick your fighters!")
@@ -3085,8 +3112,7 @@ end
 -- ============================================================================
 
 -- Input state tracking: read joypad ONCE per frame to avoid inconsistency
-local input_current = {}
-local input_prev = {}
+-- (input_current and input_prev are forward-declared in [6])
 
 local function read_input()
     input_prev = input_current
@@ -3349,26 +3375,39 @@ end
 
 --- Update the game character select sequence (called from on_frame)
 local function update_charselect_sequence()
-    if charselect_seq == CHARSELECT_SELECTING then
-        -- Check if both players have locked in their characters
-        local p1 = memory.readbyte(MEM.p1_locked)
-        local p2 = memory.readbyte(MEM.p2_locked)
-        if p1 == 0xFF and p2 == 0xFF then
-            charselect_seq = CHARSELECT_TRANSITIONING
+    local p1_state = memory.readbyte(MEM.p1_select_state)
+    local p2_state = memory.readbyte(MEM.p2_select_state)
+
+    if charselect_seq == 1 then  -- P1 selecting
+        if p1_state > 4 then
+            charselect_seq = 2  -- P2 debounce
+            print("[Urien Lab] P1 locked -- release inputs to select P2")
+        end
+    elseif charselect_seq == 2 then  -- P2 debounce
+        -- Wait for player to release all buttons before P2 selection
+        local any_held = false
+        for _, val in pairs(input_current) do
+            if val == true then any_held = true; break end
+        end
+        if not any_held then
+            charselect_seq = 3  -- P2 selecting
+            print("[Urien Lab] Selecting P2 opponent...")
+        end
+    elseif charselect_seq == 3 then  -- P2 selecting
+        if p1_state > 4 and p2_state > 4 then
+            charselect_seq = 4  -- transitioning
             emu.speedmode("turbo")
             print("[Urien Lab] Characters locked -- fast-forwarding to match...")
         end
-    elseif charselect_seq == CHARSELECT_TRANSITIONING then
-        -- Wait for match to start (phase 2 = playing)
+    elseif charselect_seq == 4 then  -- transitioning
         local phase = memory.readword(MEM.game_phase)
         if phase == 2 then
             emu.speedmode("normal")
-            charselect_seq = CHARSELECT_NONE
+            charselect_seq = 0  -- none
             app_state = APP_TRAINING
             charselect_visible = false
             selected_opponent = nil
             rebuild_filtered_exercises()
-            -- Freeze timer immediately so it doesn't tick
             memory.writebyte(MEM.round_timer, 100)
             print("[Urien Lab] Match started -- training mode active")
         end
@@ -3378,13 +3417,13 @@ end
 --- Main per-frame callback (before emulation)
 local function on_frame()
     -- Game character select: fast-forward phase skips everything
-    if charselect_seq == CHARSELECT_TRANSITIONING then
+    if charselect_seq == 4 then  -- transitioning
         update_charselect_sequence()
         return
     end
 
-    -- Game character select: selecting phase allows overlay input
-    if charselect_seq == CHARSELECT_SELECTING then
+    -- Game character select: P1 selecting (1), P2 debounce (2), or P2 selecting (3)
+    if charselect_seq >= 1 and charselect_seq <= 3 then
         read_input()
         update_charselect_sequence()
         if is_pressed("P1 Coin") then
@@ -3393,22 +3432,16 @@ local function on_frame()
         if charselect_visible then
             handle_charselect_input()
         end
-        -- After P1 locks in, mirror P1 inputs to P2 so one controller selects both
-        local p1_lock = memory.readbyte(MEM.p1_locked)
-        local p2_lock = memory.readbyte(MEM.p2_locked)
-        if p1_lock == 0xFF and p2_lock ~= 0xFF then
-            local p2 = {}
-            if input_current["P1 Up"]           then p2["P2 Up"] = true end
-            if input_current["P1 Down"]         then p2["P2 Down"] = true end
-            if input_current["P1 Left"]         then p2["P2 Left"] = true end
-            if input_current["P1 Right"]        then p2["P2 Right"] = true end
-            if input_current["P1 Weak Punch"]   then p2["P2 Weak Punch"] = true end
-            if input_current["P1 Medium Punch"] then p2["P2 Medium Punch"] = true end
-            if input_current["P1 Strong Punch"] then p2["P2 Strong Punch"] = true end
-            if input_current["P1 Weak Kick"]    then p2["P2 Weak Kick"] = true end
-            if input_current["P1 Medium Kick"]  then p2["P2 Medium Kick"] = true end
-            if input_current["P1 Strong Kick"]  then p2["P2 Strong Kick"] = true end
-            joypad.set(p2)
+        if charselect_seq == 3 then  -- P2 selecting: swap P1↔P2
+            swap_inputs()
+        elseif charselect_seq == 2 then  -- debounce: zero P1 inputs
+            joypad.set({
+                ["P1 Up"] = false, ["P1 Down"] = false,
+                ["P1 Left"] = false, ["P1 Right"] = false,
+                ["P1 Weak Punch"] = false, ["P1 Medium Punch"] = false,
+                ["P1 Strong Punch"] = false, ["P1 Weak Kick"] = false,
+                ["P1 Medium Kick"] = false, ["P1 Strong Kick"] = false,
+            })
         end
         return
     end
@@ -3463,16 +3496,19 @@ end
 --- GUI drawing callback (runs AFTER game logic, so memory writes here stick)
 local function on_gui()
     -- Game character select sequence: freeze timer and draw HUD
-    if charselect_seq == CHARSELECT_SELECTING then
+    if charselect_seq >= 1 and charselect_seq <= 3 then
         memory.writebyte(MEM.char_select_timer, 0x69)
         if charselect_visible then
             draw_charselect()
         else
-            draw_text(4, 4, "URIEN LAB -- Select characters", COLOR.text_cyan)
+            local msg = charselect_seq == 1
+                and "Select your character"
+                or "Select opponent"
+            draw_text(4, 4, "URIEN LAB -- " .. msg, COLOR.text_cyan)
             draw_text(4, 14, "Coin = Quick-load matchup", COLOR.text_gray)
         end
         return
-    elseif charselect_seq == CHARSELECT_TRANSITIONING then
+    elseif charselect_seq == 4 then  -- transitioning
         draw_text(4, 4, "Loading match...", COLOR.text_cyan)
         return
     end
