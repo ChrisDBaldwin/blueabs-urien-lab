@@ -1547,6 +1547,7 @@ local function load_char_state(char_index)
     os.rename(temp, path)
     -- Immediately freeze round timer so it doesn't tick after loading
     memory.writebyte(MEM.round_timer, 100)
+    charselect_seq = 0  -- stop native select sequence so it doesn't clear opponent
     selected_opponent = char
     rebuild_filtered_exercises()
     print("[Urien Lab] Loaded state: " .. path)
@@ -1589,6 +1590,11 @@ local naming_buffer = ""
 local show_debug = false
 local delete_confirm_id = nil -- exercise ID pending delete confirmation
 
+-- Sort modes for exercise list (cycled with HP)
+local SORT_MODES = {"category", "difficulty", "name"}
+local SORT_LABELS = { category = "Category", difficulty = "Diff", name = "Name" }
+local sort_mode = "category"
+
 --- Rebuild both exercise index lists (all + character-filtered)
 --- Sorts by category order (combo → unblockable → sequence → parry)
 rebuild_filtered_exercises = function()
@@ -1602,23 +1608,39 @@ rebuild_filtered_exercises = function()
         cat_order[cat] = i
     end
 
-    local cat_sort = function(a, b)
-        local cat_a = exercises[a].category or "combo"
-        local cat_b = exercises[b].category or "combo"
-        local order_a = cat_order[cat_a] or 99
-        local order_b = cat_order[cat_b] or 99
-        if order_a ~= order_b then
-            return order_a < order_b
+    -- Multi-mode comparator
+    local sorter
+    if sort_mode == "difficulty" then
+        sorter = function(a, b)
+            local da = exercises[a].difficulty or 1
+            local db = exercises[b].difficulty or 1
+            if da ~= db then return da < db end
+            return a < b
         end
-        return a < b
+    elseif sort_mode == "name" then
+        sorter = function(a, b)
+            local na = (exercises[a].name or ""):lower()
+            local nb = (exercises[b].name or ""):lower()
+            if na ~= nb then return na < nb end
+            return a < b
+        end
+    else -- "category" (default)
+        sorter = function(a, b)
+            local cat_a = exercises[a].category or "combo"
+            local cat_b = exercises[b].category or "combo"
+            local order_a = cat_order[cat_a] or 99
+            local order_b = cat_order[cat_b] or 99
+            if order_a ~= order_b then return order_a < order_b end
+            return a < b
+        end
     end
 
-    -- Build all-exercises list (unfiltered, category-sorted)
+    -- Build all-exercises list (unfiltered, sorted by current mode)
     local all = {}
     for i = 1, #exercises do
         table.insert(all, i)
     end
-    table.sort(all, cat_sort)
+    table.sort(all, sorter)
     all_exercises_sorted = all
 
     -- Build character-filtered list
@@ -1640,7 +1662,7 @@ rebuild_filtered_exercises = function()
             table.insert(matching, i)
         end
     end
-    table.sort(matching, cat_sort)
+    table.sort(matching, sorter)
     filtered_exercises = matching
 
     -- Clamp cursors
@@ -2090,15 +2112,26 @@ end
 --- @param cursor number  — current cursor position within ex_list
 --- @param is_all boolean — true when drawing the All tab (shows tag count indicator)
 local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h, ex_list, cursor, is_all)
-    -- Count display
+    -- Column positions (right-aligned region)
+    local col_hits = menu_x + menu_w - 96
+    local col_diff = menu_x + menu_w - 68
+    local col_side = menu_x + menu_w - 44
+    local col_prog = menu_x + menu_w - 24
+
+    -- Count display with sort indicator
+    local count_str
     if is_all then
-        draw_text(menu_x + menu_w - 60, menu_y + 2, #exercises .. " exercises", COLOR.text_gray)
+        count_str = #exercises .. " exercises"
     elseif filter_active then
-        draw_text(menu_x + menu_w - 60, menu_y + 2,
-            #ex_list .. "/" .. #exercises, COLOR.text_gray)
+        count_str = #ex_list .. "/" .. #exercises
     else
-        draw_text(menu_x + menu_w - 60, menu_y + 2, #exercises .. " exercises", COLOR.text_gray)
+        count_str = #exercises .. " exercises"
     end
+    if sort_mode ~= "category" then
+        count_str = count_str .. "  by " .. SORT_LABELS[sort_mode]
+    end
+    draw_text(menu_x + menu_w - #count_str * 4, menu_y + 2, count_str,
+        sort_mode ~= "category" and COLOR.text_yellow or COLOR.text_gray)
 
     -- Empty state
     if #ex_list == 0 then
@@ -2112,17 +2145,33 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
         return
     end
 
+    -- Header row
+    local header_y = menu_y + 14
+    draw_text(menu_x + 20, header_y, "Name",
+        sort_mode == "name" and COLOR.text_yellow or COLOR.text_gray)
+    draw_text(col_hits, header_y, "Hits",
+        COLOR.text_gray)
+    draw_text(col_diff, header_y, "Diff",
+        sort_mode == "difficulty" and COLOR.text_yellow or COLOR.text_gray)
+    draw_text(col_side, header_y, "Side", COLOR.text_gray)
+
+    -- Content rows start below header; one fewer visible row
+    local content_rows = visible_rows - 1
+    local content_y_start = header_y + row_h
+
     -- Build display rows: list of {type="header"|"exercise", ...}
-    -- Headers are non-selectable category separators; exercises map to ex_list indices
+    -- Category headers only in category sort mode
     local display_rows = {}
     local last_category = nil
     for i = 1, #ex_list do
-        local ex = exercises[ex_list[i]]
-        local cat = ex.category or "combo"
-        if cat ~= last_category then
-            local label = CATEGORY_LABELS[cat] or cat:upper()
-            table.insert(display_rows, { type = "header", label = label })
-            last_category = cat
+        if sort_mode == "category" then
+            local ex = exercises[ex_list[i]]
+            local cat = ex.category or "combo"
+            if cat ~= last_category then
+                local label = CATEGORY_LABELS[cat] or cat:upper()
+                table.insert(display_rows, { type = "header", label = label })
+                last_category = cat
+            end
         end
         table.insert(display_rows, { type = "exercise", filtered_idx = i })
     end
@@ -2138,17 +2187,17 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
 
     -- Scrolling: determine start display row based on cursor position
     local start_dr = 1
-    if cursor_display_row > visible_rows then
-        start_dr = cursor_display_row - visible_rows + 1
+    if cursor_display_row > content_rows then
+        start_dr = cursor_display_row - content_rows + 1
     end
 
     local drawn = 0
     local cursor_row_y = nil
     for dr_i = start_dr, #display_rows do
-        if drawn >= visible_rows then break end
+        if drawn >= content_rows then break end
 
         local dr = display_rows[dr_i]
-        local row_y = menu_y + 14 + drawn * row_h
+        local row_y = content_y_start + drawn * row_h
 
         if dr.type == "header" then
             -- Category header: dim yellow, non-selectable
@@ -2174,27 +2223,25 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
                 name_color = COLOR.text_yellow
             end
 
-            local diff_str = string.rep(".", ex.difficulty)
+            -- Status + Name
+            draw_text(menu_x + 12, row_y, status, name_color)
+            draw_text(menu_x + 20, row_y, ex.name, name_color)
+
+            -- Hits
+            local hits = #ex.sequence
+            draw_text(col_hits + 8, row_y, tostring(hits), COLOR.text_gray)
+
+            -- Difficulty
+            draw_text(col_diff + 4, row_y, tostring(ex.difficulty), COLOR.text_orange)
+
+            -- Side
             local side = get_exercise_side(ex.id)
             local side_color = (side == "R") and COLOR.text_cyan or COLOR.text_gray
-            draw_text(menu_x + 12, row_y, status .. ex.id:sub(3), COLOR.text_gray)
-            draw_text(menu_x + 44, row_y, ex.name, name_color)
-            draw_text(menu_x + menu_w - 62, row_y, "[" .. side .. "]", side_color)
-            draw_text(menu_x + menu_w - 50, row_y, diff_str, COLOR.text_orange)
+            draw_text(col_side, row_y, "[" .. side .. "]", side_color)
 
-            -- In All tab: show tag count; in Character tab: show completions
-            if is_all and ex.characters and #ex.characters > 0 then
-                -- Show number of tagged characters and highlight if current opponent is tagged
-                local tagged_for_opp = false
-                if selected_opponent then
-                    for _, cn in ipairs(ex.characters) do
-                        if cn == selected_opponent.name then tagged_for_opp = true; break end
-                    end
-                end
-                local tag_color = tagged_for_opp and COLOR.text_cyan or COLOR.text_gray
-                draw_text(menu_x + menu_w - 30, row_y, #ex.characters .. "ch", tag_color)
-            elseif prog and prog.completions > 0 then
-                draw_text(menu_x + menu_w - 30, row_y,
+            -- Progress
+            if prog and prog.completions > 0 then
+                draw_text(col_prog, row_y,
                     prog.completions .. "/" .. MASTERY_THRESHOLD, COLOR.text_gray)
             end
         end
@@ -2209,13 +2256,14 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
             draw_text(menu_x + 4, desc_y, "Press HK again to DELETE this exercise", COLOR.text_red)
         else
             draw_text(menu_x + 4, desc_y, sel.description or sel.name, COLOR.text_gray)
-            local hints_x = menu_x + menu_w - 140
+            local hints_x = menu_x + menu_w - 180
             if engine.state ~= STATE_IDLE then
                 draw_text(hints_x - 50, desc_y, "MP=Stop", COLOR.text_yellow)
             end
-            draw_text(hints_x, desc_y, "LK=Side", COLOR.text_cyan)
-            draw_text(hints_x + 40, desc_y, "MK=Tag", COLOR.text_yellow)
-            draw_text(hints_x + 80, desc_y, "HK=Del", COLOR.text_red)
+            draw_text(hints_x, desc_y, "HP=Sort", COLOR.text_orange)
+            draw_text(hints_x + 40, desc_y, "LK=Side", COLOR.text_cyan)
+            draw_text(hints_x + 80, desc_y, "MK=Tag", COLOR.text_yellow)
+            draw_text(hints_x + 120, desc_y, "HK=Del", COLOR.text_red)
         end
 
         -- Character tag popup below cursor row
@@ -3275,6 +3323,27 @@ local function handle_menu_input()
                     print("[Urien Lab] Deleted exercise: " .. sel.name)
                 else
                     delete_confirm_id = sel.id
+                end
+            end
+        elseif is_pressed("P1 Strong Punch") then
+            -- Cycle sort mode: category → difficulty → name → category
+            delete_confirm_id = nil
+            local saved_ex_idx = ex_list[cur]  -- remember which exercise is selected
+            for si, sm in ipairs(SORT_MODES) do
+                if sm == sort_mode then
+                    sort_mode = SORT_MODES[(si % #SORT_MODES) + 1]
+                    break
+                end
+            end
+            rebuild_filtered_exercises()
+            -- Restore cursor to same exercise in new sort order
+            if saved_ex_idx then
+                local new_list = (menu_mode == MENU_ALL_EXERCISES) and all_exercises_sorted or filtered_exercises
+                for ni, idx in ipairs(new_list) do
+                    if idx == saved_ex_idx then
+                        cur = ni
+                        break
+                    end
                 end
             end
         elseif is_pressed("P1 Weak Kick") then
