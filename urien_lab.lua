@@ -1699,7 +1699,8 @@ local function draw_charge_meters()
             gui.box(x, y, x + bar_w, y + bar_h, COLOR.transparent, COLOR.charge_border)
         end
     end
-    local x, y = 320, 170
+    local side_r = engine.current_exercise and get_exercise_side(engine.current_exercise.id) == "R"
+    local x, y = side_r and 20 or 320, 170
     local h_label = notation_mode == NOTATION_NUMPAD and "4-6" or "b-f"
     local v_label = notation_mode == NOTATION_NUMPAD and "2-8" or "d-u"
     gauge(h_label, x, y, MEM.charge_h_value, MEM.charge_h_timer)
@@ -2115,6 +2116,7 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
     end
 
     local drawn = 0
+    local cursor_row_y = nil
     for dr_i = start_dr, #display_rows do
         if drawn >= visible_rows then break end
 
@@ -2130,6 +2132,7 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
             local prog = progression[ex.id]
 
             if i == cursor then
+                cursor_row_y = row_y
                 draw_box(menu_x + 2, row_y - 1, menu_w - 4, row_h, 0xFFFFFF40, COLOR.transparent)
                 draw_text(menu_x + 4, row_y, ">", COLOR.highlight)
             end
@@ -2171,27 +2174,57 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
         drawn = drawn + 1
     end
 
-    -- Description, tag info, and button hints for selected exercise
+    -- Description and button hints for selected exercise
     if ex_list[cursor] and exercises[ex_list[cursor]] then
         local desc_y = menu_y + menu_h - 10
         local sel = exercises[ex_list[cursor]]
         if delete_confirm_id == sel.id then
-            draw_text(menu_x + 4, desc_y, "Press Fierce again to DELETE this exercise", COLOR.text_red)
+            draw_text(menu_x + 4, desc_y, "Press HK again to DELETE this exercise", COLOR.text_red)
         else
-            -- Show character tags if present, otherwise description
-            if sel.characters and #sel.characters > 0 then
-                local tag_str = "vs " .. table.concat(sel.characters, ", ")
-                draw_text(menu_x + 4, desc_y, tag_str, COLOR.text_cyan)
-            else
-                draw_text(menu_x + 4, desc_y, sel.description or sel.name, COLOR.text_gray)
-            end
-            local hints_x = menu_x + menu_w - 105
+            draw_text(menu_x + 4, desc_y, sel.description or sel.name, COLOR.text_gray)
+            local hints_x = menu_x + menu_w - 140
             if engine.state ~= STATE_IDLE then
                 draw_text(hints_x - 50, desc_y, "MP=Stop", COLOR.text_yellow)
             end
             draw_text(hints_x, desc_y, "LK=Side", COLOR.text_cyan)
-            draw_text(hints_x + 25, desc_y, "MK=Tag", COLOR.text_yellow)
-            draw_text(hints_x + 50, desc_y, "HP=Del", COLOR.text_red)
+            draw_text(hints_x + 40, desc_y, "MK=Tag", COLOR.text_yellow)
+            draw_text(hints_x + 80, desc_y, "HK=Del", COLOR.text_red)
+        end
+
+        -- Character tag popup below cursor row
+        if cursor_row_y and sel.characters and #sel.characters > 0
+            and delete_confirm_id ~= sel.id then
+            local popup_y = cursor_row_y + row_h + 1
+            local popup_x = menu_x + 4
+            local max_chars_per_line = math.floor((menu_w - 12) / 4)
+            -- Wrap character names into lines
+            local lines = {}
+            local line = "vs:"
+            for ci, cn in ipairs(sel.characters) do
+                local sep = (ci == 1) and " " or ", "
+                if #line + #sep + #cn > max_chars_per_line then
+                    table.insert(lines, line)
+                    line = "    " .. cn
+                else
+                    line = line .. sep .. cn
+                end
+            end
+            table.insert(lines, line)
+            local popup_h = #lines * row_h + 4
+            local popup_bottom = popup_y + popup_h
+            local menu_bottom = menu_y + menu_h - 12
+            if popup_bottom > menu_bottom then
+                popup_h = menu_bottom - popup_y
+            end
+            if popup_h > row_h then
+                draw_box(popup_x - 2, popup_y - 1, menu_w - 8, popup_h,
+                    0x000000E0, COLOR.text_cyan)
+                for li, ln in ipairs(lines) do
+                    local ly = popup_y + (li - 1) * row_h
+                    if ly + row_h > menu_bottom then break end
+                    draw_text(popup_x, ly, ln, COLOR.text_cyan)
+                end
+            end
         end
     end
 end
@@ -3198,7 +3231,7 @@ local function handle_menu_input()
             else
                 show_menu = false
             end
-        elseif is_pressed("P1 Strong Punch") then
+        elseif is_pressed("P1 Strong Kick") then
             -- Delete exercise (requires double-press to confirm)
             local real_idx = ex_list[cur]
             local sel = real_idx and exercises[real_idx]
@@ -3359,6 +3392,23 @@ local function on_frame()
         end
         if charselect_visible then
             handle_charselect_input()
+        end
+        -- After P1 locks in, mirror P1 inputs to P2 so one controller selects both
+        local p1_lock = memory.readbyte(MEM.p1_locked)
+        local p2_lock = memory.readbyte(MEM.p2_locked)
+        if p1_lock == 0xFF and p2_lock ~= 0xFF then
+            local p2 = {}
+            if input_current["P1 Up"]           then p2["P2 Up"] = true end
+            if input_current["P1 Down"]         then p2["P2 Down"] = true end
+            if input_current["P1 Left"]         then p2["P2 Left"] = true end
+            if input_current["P1 Right"]        then p2["P2 Right"] = true end
+            if input_current["P1 Weak Punch"]   then p2["P2 Weak Punch"] = true end
+            if input_current["P1 Medium Punch"] then p2["P2 Medium Punch"] = true end
+            if input_current["P1 Strong Punch"] then p2["P2 Strong Punch"] = true end
+            if input_current["P1 Weak Kick"]    then p2["P2 Weak Kick"] = true end
+            if input_current["P1 Medium Kick"]  then p2["P2 Medium Kick"] = true end
+            if input_current["P1 Strong Kick"]  then p2["P2 Strong Kick"] = true end
+            joypad.set(p2)
         end
         return
     end
