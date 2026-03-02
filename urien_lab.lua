@@ -2552,6 +2552,7 @@ end
 -- ============================================================================
 -- Converts raw joypad input logs into human-readable move notation.
 -- Used by the record-to-exercise system as a fallback when MOVES lookup fails.
+do -- scope 11c2+11c3 helpers to free main-chunk local slots
 
 --- Convert directional booleans to numpad value (1-9)
 --- flip: 0 = facing right (right=forward), 1 = facing left (left=forward)
@@ -2768,6 +2769,26 @@ end
 --- Build a complete exercise table from capture data
 --- Returns an exercise table or nil if capture is invalid
 build_exercise_from_capture = function()
+    -- Check if any attack button was newly pressed between two frames
+    -- Used to distinguish multi-hit moves (one input) from same-move links (two inputs)
+    local function has_new_button_press(input_log, from_frame, to_frame)
+        local buttons = {
+            "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
+            "P1 Weak Kick", "P1 Medium Kick", "P1 Strong Kick",
+        }
+        for f = from_frame, to_frame do
+            local curr = input_log[f]
+            local prev = input_log[f - 1]
+            if curr and prev then
+                for _, key in ipairs(buttons) do
+                    if curr[key] and not prev[key] then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
     if #capture.sequence == 0 then
         print("[Capture] No hits recorded -- no exercise created")
         return nil
@@ -2788,13 +2809,12 @@ build_exercise_from_capture = function()
 
     local prev_action_id = nil  -- for collapsing multi-hit moves
     local prev_hit_frame = 0   -- frame of previous hit
-    local MULTI_HIT_WINDOW = 15  -- same action within this many frames = multi-hit, beyond = repeated move
 
     for _, entry in ipairs(capture.sequence) do
-        -- Collapse consecutive hits from the same move (e.g. multi-hit supers)
-        -- But allow repeated moves (same action_id with a larger frame gap, like tackle loops)
+        -- Collapse multi-hit moves (same action, no new button press = one input, multiple hits)
+        -- But keep same-move links (same action with a new button press = re-input)
         local same_action = (entry.action_id == prev_action_id)
-        local is_multi_hit = same_action and (entry.frame - prev_hit_frame <= MULTI_HIT_WINDOW)
+        local is_multi_hit = same_action and not has_new_button_press(capture.input_log, prev_hit_frame + 1, entry.frame)
         prev_hit_frame = entry.frame
 
         if not is_multi_hit then
@@ -2935,6 +2955,8 @@ build_exercise_from_capture = function()
 
     return new_exercise
 end
+
+end -- scope 11c2+11c3
 
 -- ============================================================================
 -- [11c4] EXERCISE PERSISTENCE
@@ -3679,99 +3701,93 @@ end
 -- [13] HOOK REGISTRATION
 -- ============================================================================
 
--- Migrate old file names (learn_urien_* -> urien_lab_*, custom_drills -> exercises)
-local function migrate_file_names()
-    local renames = {
-        {"learn_urien_save.txt", SAVE_FILE},
-        {"learn_urien_matchups.txt", MATCHUP_FILE},
-        {"learn_urien_characters.txt", CHAR_SAVE_FILE},
-        {"learn_urien_custom_drills.txt", EXERCISE_FILE},
-        {"urien_lab_custom_drills.txt", EXERCISE_FILE},
-    }
-    for _, pair in ipairs(renames) do
-        if file_exists(pair[1]) and not file_exists(pair[2]) then
-            os.rename(pair[1], pair[2])
-            print("[Urien Lab] Migrated: " .. pair[1] .. " -> " .. pair[2])
-        end
-    end
-end
-
-migrate_file_names()
-
--- Migrate c_* exercises from shipped file to custom file (one-time migration)
-local function migrate_custom_exercises()
-    -- Skip if custom file already exists (migration already done)
-    if file_exists(CUSTOM_EXERCISE_FILE) then return end
-    -- Read shipped exercise file
-    local f = io.open(EXERCISE_FILE, "r")
-    if not f then return end
-    local content = f:read("*a")
-    f:close()
-
-    -- Split into blocks (between --- delimiters)
-    local shipped_blocks = {}
-    local custom_blocks = {}
-    local has_custom = false
-
-    -- Parse blocks: each exercise is between two "---" lines
-    local current_block = {}
-    local in_block = false
-    for line in content:gmatch("[^\n]+") do
-        if line == "---" then
-            if in_block and #current_block > 0 then
-                local block_text = table.concat(current_block, "\n")
-                -- Check if this block has a c_* ID
-                local id = block_text:match("ID:(c_%d+)")
-                if id then
-                    table.insert(custom_blocks, block_text)
-                    has_custom = true
-                else
-                    table.insert(shipped_blocks, block_text)
-                end
-                current_block = {}
-                in_block = false
-            else
-                in_block = true
-                current_block = {}
+-- Migrate old file names and custom exercises
+-- Wrapped in do..end with local functions so body locals use their own 200-limit scope
+do
+    local function migrate_file_names()
+        local renames = {
+            {"learn_urien_save.txt", SAVE_FILE},
+            {"learn_urien_matchups.txt", MATCHUP_FILE},
+            {"learn_urien_characters.txt", CHAR_SAVE_FILE},
+            {"learn_urien_custom_drills.txt", EXERCISE_FILE},
+            {"urien_lab_custom_drills.txt", EXERCISE_FILE},
+        }
+        for _, pair in ipairs(renames) do
+            if file_exists(pair[1]) and not file_exists(pair[2]) then
+                os.rename(pair[1], pair[2])
+                print("[Urien Lab] Migrated: " .. pair[1] .. " -> " .. pair[2])
             end
-        elseif in_block then
-            table.insert(current_block, line)
         end
     end
 
-    if not has_custom then return end
+    local function migrate_custom_exercises()
+        if file_exists(CUSTOM_EXERCISE_FILE) then return end
+        local f = io.open(EXERCISE_FILE, "r")
+        if not f then return end
+        local content = f:read("*a")
+        f:close()
 
-    -- Write custom exercises to custom file
-    local cf = io.open(CUSTOM_EXERCISE_FILE, "w")
-    if cf then
-        cf:write("# Urien Lab Custom Exercises\n")
-        cf:write("# Your captured and custom exercises (not overwritten by updates)\n")
-        cf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
-        for _, block in ipairs(custom_blocks) do
-            cf:write("---\n")
-            cf:write(block .. "\n")
-            cf:write("---\n")
+        local shipped_blocks = {}
+        local custom_blocks = {}
+        local has_custom = false
+
+        local current_block = {}
+        local in_block = false
+        for line in content:gmatch("[^\n]+") do
+            if line == "---" then
+                if in_block and #current_block > 0 then
+                    local block_text = table.concat(current_block, "\n")
+                    local id = block_text:match("ID:(c_%d+)")
+                    if id then
+                        table.insert(custom_blocks, block_text)
+                        has_custom = true
+                    else
+                        table.insert(shipped_blocks, block_text)
+                    end
+                    current_block = {}
+                    in_block = false
+                else
+                    in_block = true
+                    current_block = {}
+                end
+            elseif in_block then
+                table.insert(current_block, line)
+            end
         end
-        cf:close()
-        print("[Urien Lab] Migrated " .. #custom_blocks .. " custom exercises to " .. CUSTOM_EXERCISE_FILE)
+
+        if not has_custom then return end
+
+        local cf = io.open(CUSTOM_EXERCISE_FILE, "w")
+        if cf then
+            cf:write("# Urien Lab Custom Exercises\n")
+            cf:write("# Your captured and custom exercises (not overwritten by updates)\n")
+            cf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
+            for _, block in ipairs(custom_blocks) do
+                cf:write("---\n")
+                cf:write(block .. "\n")
+                cf:write("---\n")
+            end
+            cf:close()
+            print("[Urien Lab] Migrated " .. #custom_blocks .. " custom exercises to " .. CUSTOM_EXERCISE_FILE)
+        end
+
+        local sf = io.open(EXERCISE_FILE, "w")
+        if sf then
+            sf:write("# Urien Lab Exercises\n")
+            sf:write("# Shipped exercises (updated automatically, do not add custom exercises here)\n")
+            sf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
+            for _, block in ipairs(shipped_blocks) do
+                sf:write("---\n")
+                sf:write(block .. "\n")
+                sf:write("---\n")
+            end
+            sf:close()
+        end
     end
 
-    -- Rewrite shipped file without c_* entries
-    local sf = io.open(EXERCISE_FILE, "w")
-    if sf then
-        sf:write("# Urien Lab Exercises\n")
-        sf:write("# Shipped exercises (updated automatically, do not add custom exercises here)\n")
-        sf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
-        for _, block in ipairs(shipped_blocks) do
-            sf:write("---\n")
-            sf:write(block .. "\n")
-            sf:write("---\n")
-        end
-        sf:close()
-    end
+    migrate_file_names()
+    migrate_custom_exercises()
 end
-
-migrate_custom_exercises()
 
 -- Check for script updates from GitHub
 check_for_updates()
