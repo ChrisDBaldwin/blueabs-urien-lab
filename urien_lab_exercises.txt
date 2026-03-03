@@ -2,7 +2,7 @@
 # Shipped exercises (updated automatically, do not add custom exercises here)
 # CATEGORY: combo | unblockable | sequence | parry
 ---
-ID:c_TTH
+ID:c_00
 NAME:Tackle Tackle Headbutt
 NOTATION_SF:d+HP, b~f+MK, b~f+MK, d~u+MK
 NOTATION_NP:2HP, [4]6MK, [4]6MK, [2]8MK
@@ -15,3 +15,59 @@ SUCCESS:5
 TIMING:0,55,46,42
 HINT: Charge DB > QCF->DB+MK for the first tackle. Second tackle can land if screen shakes up
 ---
+---
+ID:c_01
+NAME:st.MP > EX.Headbutt
+NOTATION_SF:MP, d~u+KK
+NOTATION_NP:5MP, [2]8KK
+DIFFICULTY:2
+CATEGORY:combo
+SETUP:FFFFCD98,FFFF9C7D,A0,A0,full,0,1,stand,1
+SEQ:st.MP,H,A00030003|EX.Headbutt,H,S002c002c
+SUCCESS:2
+TIMING:0,15
+HINT:Charge down > go to neutral (5) for MP > Up+KK
+---
+---
+ID:c_02
+NAME:j.HK > st.MP > L.Tackle
+NOTATION_SF:j.HK, MP, b~f+LK
+NOTATION_NP:j.HK, 5MP, [4]6LK
+DIFFICULTY:1
+CATEGORY:combo
+SETUP:4900,FFFFBB70,A0,A0,full,1,0,stand,1
+SEQ:j.HK,H,A003a002e|st.MP,H,A00030003|L.Tackle,H,S003a003a
+SUCCESS:3
+TIMING:0,25,15
+HINT:Hold back to charge after jumping
+---
+---
+ID:c_03
+NAME:cr.LK > L.Headbutt
+NOTATION_SF:d+LK, d~u+LK
+NOTATION_NP:2LK, [2]8LK
+DIFFICULTY:1
+CATEGORY:combo
+SETUP:5088,FFFF8170,A0,A0,full,0,1,stand,1
+SEQ:cr.LK,H,A001b001b|L.Headbutt,H,S00290029
+SUCCESS:2
+TIMING:0,13
+HINT:be close to the opponent
+---
+---
+ID:u_00
+NAME:Standard Shoto
+NOTATION_SF:d+HP, b~f+MK, qcf+HP, b~f+HK, b~f+HK, qcf+HP (SA3), b~f+HK, d~u+MP, MK, d+HP, d+PP, d+HP, d+HP, d+HP, b~f+MK
+NOTATION_NP:2HP, [4]6MK, 236HP, [4]6HK, [4]6HK, 236HP(SA3), [4]6HK, [2]8MP, 5MK, 2HP, 2PP, 2HP, 2HP, 2HP, [4]6MK
+DIFFICULTY:5
+CATEGORY:unblockable
+CHARS:Ken
+SETUP:0B7C,FFFFDBD4,A0,A0,full,1,1,stand,1
+SEQ:cr.HP,H,A00180018|M.Tackle,H,S003b003b|H.Sphere_throw,H,S00400040|H.Tackle,H,S003c003c|H.Tackle,H,S003c003c|H.Aegis,F,F077d|H.Tackle,H,S003c003c|M.Headbutt,H,S002a002a|MK,H,A000e000e|d+HP,H,A000e000e|d+PP,H,A000e000e|d+HP,H,A000e000e|cr.HP,H,A00180018|cr.HP,H,A00180018|M.Tackle,H,S003b003b
+SUCCESS:15
+TIMEOUT:900
+RESETOK:1
+TIMING:0,55,24,65,21,1,9,40,63,16,10,13,5,9,47
+HINT:d+HP -> b~f+MK -> qcf+HP -> b~f+HK -> b~f+HK -> qcf+HP (SA3) -> b~f+HK -> d~u+MP -> MK -> d+HP -> d+PP -> d+HP -> d+HP -> d+HP -> b~f+MK
+---
+

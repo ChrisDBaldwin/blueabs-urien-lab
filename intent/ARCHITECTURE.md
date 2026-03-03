@@ -10,11 +10,13 @@ Numbered sections form a dependency chain — later sections depend on earlier o
 
 | Layer | Sections | Role |
 |-------|----------|------|
-| Data | [1]-[4] | Constants, memory map, moves, exercise definitions |
+| Data | [1], [1b], [2]-[4] | Constants, update/distribution, memory map, moves, exercise definitions |
 | Infrastructure | [5]-[8] | Progression, utilities, game state, dummy controller |
 | Engine | [9]-[10] | Exercise state machine, input display |
-| Application | [11a]-[11c] | Save states, HUD/menu, capture/builder |
-| Glue | [12]-[13] | Input handlers, hooks, initialization |
+| Application | [11a]-[11c4] | Save states, HUD/menu, capture/builder/persistence |
+| Glue | [12]-[13] | Main loop callbacks, hook registration |
+
+Note: the source has a duplicate `[11b]` label — the first is HUD & Menu, the second is Exercise Capture (should be `[11c]`).
 
 ## Frame Callback Split
 

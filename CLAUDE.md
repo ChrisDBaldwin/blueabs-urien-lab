@@ -4,16 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Blueabs Urien Lab** is a Lua training script for **Street Fighter III: 3rd Strike** running on **FBNeo (FinalBurn Neo)** emulator. It teaches Urien combos progressively through a curriculum-driven exercise system — from basic normals through tackle loops to advanced Aegis Reflector unblockable setups.
+**Blueabs Urien Lab** is a Lua training script for **Street Fighter III: 3rd Strike** running on **FBNeo (FinalBurn Neo)** emulator. It teaches Urien combos progressively through a curriculum-driven exercise system.
 
-### Flow
-
-1. Script loads → auto-loads first available save state → **character select grid** appears (19 characters, 4×5 grid)
-2. **Start** toggles the overlay — hide it to play, show it to save/load
-3. **Fierce** saves the current match state for the selected opponent
-4. **Jab** loads a saved state → transitions to training mode
-5. **Start** opens the exercise menu to select which combo to practice
-6. Exercise engine manages setup, detection, and progression
+For user flow, controls, behavioral invariants, and feature details see `intent/CURRENT_STATE.md`.
 
 ## Running the Script
 
@@ -21,54 +14,58 @@ Load `urien_lab.lua` via FBNeo's Lua console (`Game > Lua Scripting`). The ROM m
 
 ## Architecture
 
-### Main File: `urien_lab.lua` (~3000 lines)
+### Main File: `urien_lab.lua` (~3900 lines)
 
 Two-level state machine:
-- **App level:** `APP_CHARSELECT` ↔ `APP_TRAINING` — controls whether the character select grid or the training HUD is shown
+- **App level:** `APP_CHARSELECT` ↔ `APP_TRAINING` — controls whether the character select screen or the training HUD is shown
 - **Exercise level:** `IDLE` → `SETUP` → `ACTIVE` → `SUCCESS`/`FAIL` — manages individual exercise execution
 
 Organized into numbered sections:
 
 | Section | Purpose |
 |---------|---------|
-| [1] Constants | Screen dims (384×224), timing, colors, exercise/app state enums, category constants |
-| [2] Memory Map | CPS3 RAM addresses (game phase, P1/P2 base, charge, meter, combos) |
+| [1] Constants & Config | Screen dims (384×224), timing, colors, exercise/app state enums, category constants |
+| [1b] Update & Distribution | Auto-update from GitHub, save state download from voidtalker.com |
+| [2] Memory Address Map | CPS3 RAM addresses (game phase, P1/P2 base, charge, meter, combos) |
 | [2b] Character Roster | 19 SF3:3S characters (alphabetical, no Gill), grid layout constants, app state vars |
-| [3] Move Database | Urien moves with action IDs, dual notation (SF + Numpad) |
+| [3] Urien Move Database | Urien moves with action IDs, dual notation (SF + Numpad) |
 | [4] Exercise Definitions | Exercises loaded from file with sequences, setup requirements, success/fail criteria, hints |
-| [5] Progression | Save/load to `urien_lab_save.txt`, mastery tracking (3 completions) |
-| [6] Utilities | Memory reads (little-endian), action string builders, action ID normalization |
+| [5] Progression State | Save/load to `urien_lab_save.txt`, mastery tracking (3 completions) |
+| [6] Utility Functions | Memory reads (little-endian), action string builders, action ID normalization |
 | [7] Game State Reader | Per-frame polling of positions, actions, combo counter, hit region, meter |
 | [8] Dummy Controller | P2 position/life/meter/stun management, input locking, delayed HP recovery |
 | [9] Exercise Engine | State machine: SETUP → ACTIVE → SUCCESS/FAIL, combo detection, timeout |
 | [10] Input Display | Toggleable SF/Numpad notation |
-| [11a] Matchup States | Legacy 5-slot save state system (slots 8001–8005) |
-| [11a2] Character States | Named save files (`vs_CharName.fs`), metadata in `urien_lab_characters.txt`, auto-load on startup |
+| [11a] Matchup Save States | Legacy 5-slot save state system (slots 8001–8005) |
+| [11a2] Character Save States | Named save files (`vs_CharName.fs`), metadata in `urien_lab_characters.txt`, auto-load on startup |
 | [11b] HUD & Menu | Character select grid, three-tab exercise menu (All / Character / Opponent), result banners |
-| [11c] Exercise Capture | Records combos to `captured_exercises.txt` in Lua table format |
+| [11b]* Exercise Capture | Records combos to `captured_exercises.txt` — note: duplicate label, should be [11c] |
 | [11c2] Input Notation Detector | Converts joypad input logs to human-readable notation (numpad, SF format) |
 | [11c3] Exercise Builder | Record-to-Exercise — converts captured combos into playable exercise definitions |
-| [11c4] Exercise Persistence | Save/load exercises to `urien_lab_exercises.txt` |
-| [12] Controls | Input handlers: charselect navigation, menu nav, exercise selection |
-| [13] Hooks | FBNeo callbacks, hotkeys, file migration, initialization |
+| [11c4] Exercise Persistence | Save/load exercises to `urien_lab_exercises.txt` and `urien_lab_custom.txt` |
+| [12] Main Loop Callbacks | `on_frame()` (input + state machines), `on_gui()` (draw + memory writes) |
+| [13] Hook Registration | FBNeo callbacks, hotkeys, file migration, initialization |
 
-## Key Technical Details
+### Frame Callback Split (critical)
+
+- `emu.registerbefore()` → `on_frame()`: Before game logic. Input reading, state machines, dummy control.
+- `gui.register()` → `on_gui()`: After game logic. Drawing, memory writes that must persist (timer, HP, meter, stun).
+
+**Memory writes in `on_frame()` get overwritten by the game.** Anything that needs to stick must go in `on_gui()`.
 
 ### FBNeo Lua API Used
 - **Memory:** `memory.readbyte()`, `memory.readword()`, `memory.writebyte()`, `memory.writeword()`
-- **Input:** `joypad.set()` (P2 dummy), `joypad.get()` (P1 input), `input.registerhotkey()` (Alt+N dev keys). Button names use fighting game notation: `"P1 Weak Punch"`, `"P1 Medium Punch"`, `"P1 Strong Punch"`, `"P1 Weak Kick"`, `"P1 Medium Kick"`, `"P1 Strong Kick"`, `"P1 Start"`, `"P1 Up/Down/Left/Right"` (same pattern for P2)
-- **Savestates:** `savestate.create()`, `savestate.save()`, `savestate.load()` — uses temp slot + `os.rename()` to produce named files (`vs_CharName.fs`)
-- **Hooks:** `emu.registerbefore()` (pre-frame logic/input), `gui.register()` (draw overlay + memory writes that must persist after game logic)
+- **Input:** `joypad.set()` (P2 dummy), `joypad.get()` (P1 input), `input.registerhotkey()` (Alt+N dev keys). Button names: `"P1 Weak Punch"`, `"P1 Medium Punch"`, `"P1 Strong Punch"`, `"P1 Weak Kick"`, `"P1 Medium Kick"`, `"P1 Strong Kick"`, `"P1 Start"`, `"P1 Up/Down/Left/Right"` (same pattern for P2)
+- **Savestates:** `savestate.create()`, `savestate.save()`, `savestate.load()` — temp slot (99999) + `os.rename()` to named files
+- **Hooks:** `emu.registerbefore()`, `gui.register()`
 - **Drawing:** `gui.text()`, `gui.box()`
-
-**Important:** Memory writes that need to stick (timer, HP, meter) must happen in `gui.register()` (runs after game logic), not `emu.registerbefore()` (runs before, so the game overwrites them).
 
 ### Action ID System
 
 Action strings are built by `build_action_string()` as `prefix + sub(4hex) + id(4hex)`:
 - Prefixes: `A` (attack/normal), `S` (special), `F` (projectile, 5-char format: `F` + id(4hex)), `G` (guard), `T` (throw), `M` (misc), `N` (neutral)
 - The game sets a `0x2000` flag on `action_id` during connected hits. `build_action_string()` strips this with `action_id % 0x2000` so IDs always match the clean values in the MOVES database.
-- `normalize_action_string()` strips the same flag from stored strings (for backward compatibility with exercise files saved before normalization was added).
+- `normalize_action_string()` strips the same flag from stored strings (backward compatibility).
 
 ### Critical Memory Addresses
 - Game phase: `0x020154A6` (word, 2 = playing)
@@ -81,20 +78,6 @@ Action strings are built by `build_action_string()` as `prefix + sub(4hex) + id(
 - Meter gauge: `0x020695B5`, bars: `0x020286AD`
 - P2 stun bar: `0x02069612` (word), P1 stun timer: `0x020695FD` (byte)
 - P1 character ID: `0x02011387` (byte, Urien = 14)
-
-### Always-On Training Resources (in `gui.register`)
-These run every frame when the game is playing, regardless of exercise state:
-- **Round timer** — frozen at 99
-- **Super meter** — always full
-- **Stun** — always cleared (both players)
-- **HP recovery** — delayed rejuvenate after combo drops (configurable delay + speed)
-- **P2 survival** — kept alive during combos (min 0x10 HP)
-
-### Combo Detection
-1. Monitor combo counter at `0x020696C5`
-2. Sum hit region `0x02011000–0x020110C8` for waza total
-3. When either increases, compare P1's action string against the expected move in the exercise sequence
-4. Combo counter drop (>0 → 0) triggers FAIL, unless `exercise.allow_combo_reset` is set (for multi-combo Aegis setups)
 
 ### Exercise Definition Format
 ```lua
@@ -109,37 +92,15 @@ These run every frame when the game is playing, regardless of exercise state:
             p2_state = "stand", corner = false },
   success = { min_combo = 2 },
   fail = { timeout_frames = 600 },
+  ref_timing = { 12, 8 },
   hints = { "Hold down-back, press d+HP, then tap f+LK during the cancel window" },
-  difficulty = 2 }
+  difficulty = 2,
+  allow_combo_reset = false,
+  characters = {"Ken", "Yun"} }
 ```
 
-Exercises support these optional fields: `allow_combo_reset = true` for multi-combo sequences, `characters = {"Ken", "Yun"}` to restrict the exercise to specific opponents (no tag = universal, shows for all), and `category` (one of: `"combo"`, `"unblockable"`, `"sequence"`, `"parry"`; defaults to `"combo"`).
-
-### Exercise Categories
-Exercises are organized into categories that appear as group headers in the menu:
-- **combo** — true combos
-- **unblockable** — Aegis Reflector unblockable setups
-- **sequence** — strong routes that aren't true unblockables but worth mapping
-- **parry** — parry exercises
-
-### Multi-Combo Exercises (Aegis Setups)
-Exercises with `allow_combo_reset = true` tolerate the combo counter resetting to 0 mid-sequence. The exercise builder auto-sets this flag when it filters out N/M/G/T-prefix entries (neutral/misc state transitions that appear during combo resets). Persisted as `RESETOK:1` in the exercise file.
-
-### Record-to-Exercise Flow
-1. Press **Coin** during a match to start recording (pauses any active exercise)
-2. Perform a combo — the capture system records hits and joypad inputs each frame
-3. Press **Coin** again to stop — the system automatically builds a playable exercise:
-   - Known moves are identified via `lookup_move_name()` against the MOVES database
-   - Unknown moves get notation inferred from joypad edge detection (`detect_motion` + `detect_button`)
-   - Multi-hit moves (e.g., Tyrant Slaughter) are collapsed into a single sequence step
-   - N/M/G/T-prefix entries are filtered out (state transitions, not player moves)
-4. The new exercise appears in the exercise menu under the COMBO category
-5. Exercises persist to `urien_lab_exercises.txt` and reload on script restart
-6. To rename an exercise, edit the `NAME:` line in `urien_lab_exercises.txt` and press **Alt+9** to reload
-7. Delete exercises: highlight in menu, press Fierce twice to confirm
-
 ### Exercise File Format
-Line-oriented key:value blocks in `urien_lab_exercises.txt`:
+Line-oriented key:value blocks in `urien_lab_exercises.txt` / `urien_lab_custom.txt`:
 ```
 ---
 ID:c_01
@@ -154,50 +115,29 @@ SEQ:cr.HP,H,A00180018|L.Tackle,H,S003a003a
 SUCCESS:2
 TIMEOUT:900
 RESETOK:1
+TIMING:12,8
 HINT:d+HP -> b~f+LK
 ---
 ```
 
-### Character Save State System
-Save states use named files (`vs_CharName.fs`) stored next to the script. A temp FBNeo slot (99999) is used for the API call, then the file is renamed. Metadata persisted to `urien_lab_characters.txt` (CSV: `id,name,saved`). Legacy numbered files are auto-migrated to named format on startup.
+All fields after ID and NAME are optional on parse (backward compatible).
 
 ## Data Files
 
 | File | Tracked | Purpose |
 |------|---------|---------|
 | `urien_lab.lua` | Yes | Main script |
-| `urien_lab_exercises.txt` | Yes | Exercise definitions (the shipped content) |
-| `CLAUDE.md` | Yes | Dev guidance |
+| `urien_lab_exercises.txt` | Yes | Shipped exercise definitions (updated automatically) |
+| `urien_lab_custom.txt` | No | User's captured/custom exercises (never overwritten by updates) |
+| `CLAUDE.md` | Yes | Dev guidance (this file) |
 | `README.md` | Yes | User-facing docs |
+| `intent/` | Yes | Design docs: overview, architecture, current/desired state |
 | `urien_lab_save.txt` | No | User progression (completions, attempts, mastery) |
 | `urien_lab_characters.txt` | No | Character save state metadata |
+| `character_select.fs` | No | Character select screen save state (downloaded on first boot) |
 | `captured_exercises.txt` | No | Raw capture logs |
 | `vs_*.fs` | No | Binary FBNeo save states (user-specific, ROM-dependent) |
 | `reference/` | No | Prior art scripts (gitignored) |
-
-## Controls
-
-### Character Select (on script load)
-- **D-Pad** — Navigate character grid (4×5)
-- **Start** — Toggle character select overlay (hide to play, show to save/load)
-- **Jab (P1 Weak Punch)** — Load saved state for selected opponent
-- **Fierce (P1 Strong Punch)** — Save current game state for selected opponent
-
-### Training Mode
-- **Start** — Open/close exercise menu
-- **Left/Right** — Switch tabs (All / Character / Opponent)
-- **Up/Down** — Navigate exercises
-- **Jab (P1 Weak Punch)** — Select exercise / Change opponent (in Opponent tab)
-- **Strong (P1 Medium Punch)** — Back / Close menu
-- **Fierce (P1 Strong Punch)** — Delete exercise (press twice to confirm)
-- **Weak Kick** — Toggle exercise side (L/R)
-- **Medium Kick** — Toggle current opponent tag on highlighted exercise
-- **Coin** — Toggle record-to-exercise capture (records combo → creates playable exercise)
-- **Alt+2** — Toggle numpad notation
-- **Alt+3** — Reset current exercise progress
-- **Alt+4** — Toggle debug display
-- **Alt+5** — Toggle menu (reliable backup for Start)
-- **Alt+9** — Reload exercises (after editing `urien_lab_exercises.txt`)
 
 ## Conventions
 - All colors are RRGGBBAA 32-bit hex (FBNeo convention, e.g. `0xFF0000FF` = red, full opacity)
@@ -206,3 +146,4 @@ Save states use named files (`vs_CharName.fs`) stored next to the script. A temp
 - Character IDs match the game's internal numbering (0=Gill through 19=Remy)
 - Save state files: `vs_CharName.fs` (e.g., `vs_Yun.fs`, `vs_Ken.fs`)
 - Single-file architecture by design (FBNeo Lua has no `require`)
+- Shipped exercise IDs use `t_XX` prefix, custom use `c_XX`

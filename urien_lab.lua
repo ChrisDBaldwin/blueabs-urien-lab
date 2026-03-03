@@ -53,6 +53,7 @@ local RECOVERY_DELAY_FRAMES = 20     -- Frames after combo drops before HP start
 local LIFE_RECOVERY_SPEED = 8        -- HP units per frame during recovery
 local LIFE_FULL = 0xA0               -- Full HP value
 local STUN_RESET_DELAY_FRAMES = 40   -- Frames after combo drops before stun resets
+local METER_REFILL_DELAY_FRAMES = 90 -- Frames of no input before meter starts filling
 
 -- Mastery
 local MASTERY_THRESHOLD = 3          -- Completions needed to master an exercise
@@ -283,6 +284,10 @@ local MEM = {
     -- Meter
     meter_gauge     = 0x020695B5,  -- byte (gauge fill within current bar)
     meter_bars      = 0x020286AD,  -- byte (number of full bars)
+    meter_count     = 0x020695BF,  -- byte (number of full bars, authoritative)
+    meter_update    = 0x020157C8,  -- byte (write 0x01 to sync meter changes)
+    max_meter_gauge = 0x020695B3,  -- byte (max gauge per bar, SA-dependent)
+    max_meter_count = 0x020695BD,  -- byte (max bars for selected SA)
 
     -- Projectile / object system
     obj_list_base   = 0x02068A96,  -- linked list head indices
@@ -403,10 +408,12 @@ local MOVES = {
     ["M.Tackle"]   = { action_ids = {"S003b003b"}, type = "special", sf = "b~f+MK",    numpad = "[4]6MK" },
     ["H.Tackle"]   = { action_ids = {"S003c003c"}, type = "special", sf = "b~f+HK",    numpad = "[4]6HK" },
     ["EX.Tackle"]  = { action_ids = {"S003d003d"}, type = "special", sf = "b~f+KK",    numpad = "[4]6KK" },
-    ["L.Headbutt"] = { action_ids = {"S00290029"}, type = "special", sf = "d~u+LK",    numpad = "[2]8LK" },
-    ["M.Headbutt"] = { action_ids = {"S002a002a"}, type = "special", sf = "d~u+MK",    numpad = "[2]8MK" },
-    ["H.Headbutt"] = { action_ids = {"S002b002b"}, type = "special", sf = "d~u+HK",    numpad = "[2]8HK" },
-    ["EX.Headbutt"]= { action_ids = {"S002c002c"}, type = "special", sf = "d~u+KK",    numpad = "[2]8KK" },
+    ["L.Headbutt"] = { action_ids = {"S00290029"}, type = "special", sf = "d~u+LP",    numpad = "[2]8LP" },
+    ["M.Headbutt"] = { action_ids = {"S002a002a"}, type = "special", sf = "d~u+MP",    numpad = "[2]8MP" },
+    ["H.Headbutt"] = { action_ids = {"S002b002b"}, type = "special", sf = "d~u+HP",    numpad = "[2]8HP" },
+    ["EX.Headbutt"]= { action_ids = {"S002c002c"}, type = "special", sf = "d~u+PP",    numpad = "[2]8PP" },
+    ["L.Knee"]     = { action_ids = {"S00190019"}, type = "special", sf = "d~u+LK(air)", numpad = "[2]8LK(air)" },
+    ["M.Knee"]     = { action_ids = {"S001a001a"}, type = "special", sf = "d~u+MK(air)", numpad = "[2]8MK(air)" },
     ["H.Knee"]     = { action_ids = {"S001b001b"}, type = "special", sf = "d~u+HK(air)", numpad = "[2]8HK(air)" },
     ["Taunt"]      = { action_ids = {"S00370037"}, type = "other",   sf = "Taunt",      numpad = "Taunt" },
 
@@ -632,6 +639,7 @@ local game_state = {
 
     meter_gauge = 0,
     meter_bars = 0,
+    meter_bars_prev = 0,
 
     frame_count = 0,
 }
@@ -676,6 +684,7 @@ local function read_game_state()
     gs.waza_total = wt
 
     -- Meter
+    gs.meter_bars_prev = gs.meter_bars
     gs.meter_gauge = memory.readbyte(MEM.meter_gauge)
     gs.meter_bars = memory.readbyte(MEM.meter_bars)
 
@@ -703,8 +712,13 @@ local function set_life(player, val)
 end
 
 local function fill_meter_full()
-    memory.writebyte(MEM.meter_gauge, 0x80)
-    memory.writebyte(MEM.meter_bars, 0x02)
+    local max_g = memory.readbyte(MEM.max_meter_gauge)
+    local max_b = memory.readbyte(MEM.max_meter_count)
+    if max_g == 0 then max_g = 0x80 end  -- fallback before match starts
+    if max_b == 0 then max_b = 2 end
+    memory.writebyte(MEM.meter_gauge, max_g)
+    memory.writebyte(MEM.meter_count, max_b)
+    memory.writebyte(MEM.meter_update, 0x01)
 end
 
 local function fill_h_charge()
@@ -800,12 +814,24 @@ local function reset_hit_tracking()
     game_state.combo_counter_prev = 0
 end
 
+--- Resource management timers (declared before apply_exercise_setup which uses them)
+local res = {
+    recovery = 0,       -- counts up after combo drops
+    stun_reset = 0,     -- counts up after combo drops, resets stun after delay
+    meter_refill = 0,   -- counts up when meter is not full and no combo active
+    meter_consumed = false,  -- true after super meter drops, cleared on refill
+    prev_bars = 0,      -- previous frame's meter bars (read in on_gui, post-game-logic)
+}
+
 local function apply_exercise_setup(exercise)
     local setup = exercise.setup
     set_life(1, setup.p1_life)
     set_life(2, setup.p2_life)
     if setup.meter == "full" then
         fill_meter_full()
+        res.meter_consumed = false
+        res.meter_refill = 0
+        res.prev_bars = 2
     end
     if konami.active then
         if setup.fill_h_charge then fill_h_charge() end
@@ -814,9 +840,7 @@ local function apply_exercise_setup(exercise)
     reset_hit_tracking()
 end
 
---- Resource management: delayed HP recovery, delayed stun reset, meter refill
-local recovery_timer = 0  -- counts up after combo drops
-local stun_reset_timer = 0  -- counts up after combo drops, resets stun after delay
+-- (resource timers moved before apply_exercise_setup)
 
 reset_stun = function()
     -- Zero P2 stun bar so dummy doesn't get dizzy
@@ -829,41 +853,36 @@ local function manage_resources(exercise)
     if not exercise then return end
     local setup = exercise.setup
 
-    -- Always keep meter full (needed for EX/super exercises)
-    if setup.meter == "full" then
-        fill_meter_full()
-    end
-
     -- Keep charge ready only if turbo charge secret is active
     if konami.active then
         if setup.fill_h_charge then fill_h_charge() end
         if setup.fill_v_charge then fill_v_charge() end
     end
 
+    -- Note: meter management is handled exclusively in on_gui (writes in on_frame
+    -- get overwritten by game logic). HP/stun/charge writes here are also overwritten,
+    -- but the always-on on_gui path handles persistent writes for those too.
+
     -- HP and stun recovery: delayed reset after combo drops
     if game_state.combo_counter == 0 then
-        recovery_timer = recovery_timer + 1
-        stun_reset_timer = stun_reset_timer + 1
-        if recovery_timer > RECOVERY_DELAY_FRAMES then
-            -- Rapidly recover both players' HP
+        res.recovery = res.recovery + 1
+        res.stun_reset = res.stun_reset + 1
+        if res.recovery > RECOVERY_DELAY_FRAMES then
             local p1_hp = memory.readbyte(MEM.p1_life)
             local p2_hp = memory.readbyte(MEM.p2_life)
             if p1_hp < LIFE_FULL then
-                p1_hp = math.min(p1_hp + LIFE_RECOVERY_SPEED, LIFE_FULL)
-                memory.writebyte(MEM.p1_life, p1_hp)
+                memory.writebyte(MEM.p1_life, math.min(p1_hp + LIFE_RECOVERY_SPEED, LIFE_FULL))
             end
             if p2_hp < LIFE_FULL then
-                p2_hp = math.min(p2_hp + LIFE_RECOVERY_SPEED, LIFE_FULL)
-                memory.writebyte(MEM.p2_life, p2_hp)
+                memory.writebyte(MEM.p2_life, math.min(p2_hp + LIFE_RECOVERY_SPEED, LIFE_FULL))
             end
         end
-        if stun_reset_timer > STUN_RESET_DELAY_FRAMES then
+        if res.stun_reset > STUN_RESET_DELAY_FRAMES then
             reset_stun()
         end
     else
-        -- Combo is active, reset the recovery timers
-        recovery_timer = 0
-        stun_reset_timer = 0
+        res.recovery = 0
+        res.stun_reset = 0
         -- But always keep P2 alive during combos so the round doesn't end
         if memory.readbyte(MEM.p2_life) < 0x10 then
             memory.writebyte(MEM.p2_life, 0x10)
@@ -896,6 +915,12 @@ local engine = {
     -- double-counting consecutive moves with the same action ID
     last_match_action = "",        -- action string at last matched step
     action_changed_since_match = true,  -- has action string changed since last match?
+
+    -- Same-action step advancement: when consecutive steps share an action_id,
+    -- use new button press detection instead of action-string-change detection
+    next_expects_same_action = false,   -- next step has same action_id as current
+    new_input_since_match = false,      -- new attack button pressed since last match
+    last_match_buttons = {},            -- joypad snapshot at last match
 
     -- Fail diagnostics
     fail_step_index = 0,       -- which step failed
@@ -965,6 +990,14 @@ local function scan_projectile_hits(expected_ids)
     return nil
 end
 
+-- Sphere_throw and Aegis Reflector share the same P1 activation animation.
+-- When meter was consumed, remap Sphere_throw action_id → Aegis action_id.
+local SPHERE_TO_AEGIS = {
+    ["S003e003e"] = "F077b",  -- L.Sphere_throw → L.Aegis
+    ["S003f003f"] = "F077c",  -- M.Sphere_throw → M.Aegis
+    ["S00400040"] = "F077d",  -- H.Sphere_throw → H.Aegis
+}
+
 local function select_exercise(index)
     index = clamp(index, 1, #exercises)
     engine.current_exercise_index = index
@@ -981,6 +1014,9 @@ local function select_exercise(index)
     engine.last_hit_frame = 0
     engine.last_match_action = ""
     engine.action_changed_since_match = true
+    engine.next_expects_same_action = false
+    engine.new_input_since_match = false
+    engine.last_match_buttons = {}
     engine.fail_step_index = 0
     engine.fail_type = ""
     engine.fail_gap = 0
@@ -1004,6 +1040,9 @@ local function reset_exercise()
     engine.last_hit_frame = 0
     engine.last_match_action = ""
     engine.action_changed_since_match = true
+    engine.next_expects_same_action = false
+    engine.new_input_since_match = false
+    engine.last_match_buttons = {}
     engine.fail_step_index = 0
     engine.fail_type = ""
     engine.fail_gap = 0
@@ -1041,6 +1080,20 @@ local function engine_active_update()
 
     -- Manage HP/stun/meter/charge with delayed recovery
     manage_resources(ex)
+
+    -- Timeout check: fail if exercise has been active too long
+    local timeout = (ex.fail and ex.fail.timeout_frames) or 900
+    if game_state.frame_count - engine.active_start_frame > timeout then
+        engine.state = STATE_FAIL
+        engine.result_timer = FAIL_DISPLAY_FRAMES
+        engine.fail_step_index = engine.combo_index
+        engine.fail_type = "timeout"
+        engine.fail_gap = 0
+        engine.fail_ref_gap = 0
+        engine.fail_last_action = ""
+        engine.fail_reason = "Timeout"
+        return
+    end
 
     -- Current step we're looking for
     if engine.combo_index > #seq then
@@ -1093,6 +1146,21 @@ local function engine_active_update()
             engine.action_changed_since_match = true
         end
 
+        -- Same-action step advancement: when consecutive steps share an
+        -- action_id, detect new button presses instead of action-string changes
+        if engine.next_expects_same_action and not engine.new_input_since_match then
+            local attack_buttons = {
+                "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
+                "P1 Weak Kick", "P1 Medium Kick", "P1 Strong Kick",
+            }
+            for _, key in ipairs(attack_buttons) do
+                if input_current[key] and not engine.last_match_buttons[key] then
+                    engine.new_input_since_match = true
+                    break
+                end
+            end
+        end
+
         local new_hit = false
         if game_state.combo_counter > game_state.combo_counter_prev and game_state.combo_counter > 0 then
             new_hit = true
@@ -1100,7 +1168,7 @@ local function engine_active_update()
             new_hit = true
         end
 
-        if new_hit and engine.action_changed_since_match then
+        if new_hit and (engine.action_changed_since_match or (engine.next_expects_same_action and engine.new_input_since_match)) then
             local hit_waza = game_state.p1.action_string
             engine.last_hit_waza = hit_waza
 
@@ -1111,7 +1179,26 @@ local function engine_active_update()
                     engine.last_hit_frame = game_state.frame_count
                     engine.last_match_action = hit_waza
                     engine.action_changed_since_match = false
-                    engine.combo_index = engine.combo_index + 1
+
+                    -- Snapshot buttons and check if next step shares action_id
+                    engine.last_match_buttons = {}
+                    for k, v in pairs(input_current) do
+                        engine.last_match_buttons[k] = v
+                    end
+                    engine.new_input_since_match = false
+                    engine.next_expects_same_action = false
+                    local next_idx = engine.combo_index + 1
+                    if next_idx <= #seq then
+                        for _, cur_id in ipairs(current_step.action_ids) do
+                            for _, nxt_id in ipairs(seq[next_idx].action_ids) do
+                                if cur_id == nxt_id then
+                                    engine.next_expects_same_action = true
+                                end
+                            end
+                        end
+                    end
+
+                    engine.combo_index = next_idx
                     if engine.combo_index == 2 and not engine.attempt_started then
                         engine.attempt_started = true
                         engine.session_attempts = engine.session_attempts + 1
@@ -1251,6 +1338,10 @@ local function combo_tracker_update()
 
         if new_hit then
             local action_id = gs.p1.action_string
+            -- Aegis activation shares action_id with Sphere_throw; remap when meter was consumed
+            if res.meter_consumed and SPHERE_TO_AEGIS[action_id] then
+                action_id = SPHERE_TO_AEGIS[action_id]
+            end
             -- Deduplicate: don't add the same action_id consecutively (multi-hit moves)
             if action_id ~= combo_tracker.last_action_id then
                 combo_tracker.last_action_id = action_id
@@ -1547,6 +1638,8 @@ local function load_char_state(char_index)
     os.rename(temp, path)
     -- Immediately freeze round timer so it doesn't tick after loading
     memory.writebyte(MEM.round_timer, 100)
+    -- Fill meter immediately on next on_gui frame
+    res.meter_refill = METER_REFILL_DELAY_FRAMES + 1
     charselect_seq = 0  -- stop native select sequence so it doesn't clear opponent
     selected_opponent = char
     rebuild_filtered_exercises()
@@ -1580,20 +1673,22 @@ local MENU_ALL_EXERCISES = 1   -- All exercises (unfiltered)
 local MENU_CHAR_EXERCISES = 2  -- Character-filtered exercises
 local MENU_OPPONENT = 3
 
-local show_menu = false
-local menu_cursor_all = 1       -- cursor for All tab
-local menu_cursor_char = 1      -- cursor for Character tab
-local menu_mode = MENU_ALL_EXERCISES
-local matchup_cursor = 1
-local naming_slot = nil       -- set to slot number when naming a matchup
-local naming_buffer = ""
-local show_debug = false
-local delete_confirm_id = nil -- exercise ID pending delete confirmation
+local menu = {
+    show = false,
+    cursor_all = 1,        -- cursor for All tab
+    cursor_char = 1,       -- cursor for Character tab
+    mode = MENU_ALL_EXERCISES,
+    matchup_cursor = 1,
+    naming_slot = nil,     -- set to slot number when naming a matchup
+    naming_buffer = "",
+    debug = false,
+    delete_id = nil,       -- exercise ID pending delete confirmation
+    sort_mode = "category",
+}
 
 -- Sort modes for exercise list (cycled with HP)
 local SORT_MODES = {"category", "difficulty", "name"}
 local SORT_LABELS = { category = "Category", difficulty = "Diff", name = "Name" }
-local sort_mode = "category"
 
 --- Rebuild both exercise index lists (all + character-filtered)
 --- Sorts by category order (combo → unblockable → sequence → parry)
@@ -1610,14 +1705,14 @@ rebuild_filtered_exercises = function()
 
     -- Multi-mode comparator
     local sorter
-    if sort_mode == "difficulty" then
+    if menu.sort_mode == "difficulty" then
         sorter = function(a, b)
             local da = exercises[a].difficulty or 1
             local db = exercises[b].difficulty or 1
             if da ~= db then return da < db end
             return a < b
         end
-    elseif sort_mode == "name" then
+    elseif menu.sort_mode == "name" then
         sorter = function(a, b)
             local na = (exercises[a].name or ""):lower()
             local nb = (exercises[b].name or ""):lower()
@@ -1666,11 +1761,11 @@ rebuild_filtered_exercises = function()
     filtered_exercises = matching
 
     -- Clamp cursors
-    if menu_cursor_all > #all_exercises_sorted then
-        menu_cursor_all = math.max(1, #all_exercises_sorted)
+    if menu.cursor_all > #all_exercises_sorted then
+        menu.cursor_all = math.max(1, #all_exercises_sorted)
     end
-    if menu_cursor_char > #filtered_exercises then
-        menu_cursor_char = math.max(1, #filtered_exercises)
+    if menu.cursor_char > #filtered_exercises then
+        menu.cursor_char = math.max(1, #filtered_exercises)
     end
 end
 
@@ -1830,7 +1925,7 @@ end
 
 --- Draw the top header bar (always visible in training mode)
 local function draw_header()
-    draw_box(0, 0, SCREEN_W, 20, COLOR.bg_header, COLOR.border)
+    draw_box(0, 0, SCREEN_W, 16, COLOR.bg_header, COLOR.border)
 
     -- Line 1 (y=2): "URIEN LAB" on left, status on right
     draw_text(4, 2, "URIEN LAB", COLOR.text_cyan)
@@ -1848,18 +1943,18 @@ local function draw_header()
         draw_text(SCREEN_W - 60, 2, "vs " .. selected_opponent.name, COLOR.text_white)
     end
 
-    -- Line 2 (y=10): exercise name or instructions on left, exercise count on right
+    -- Line 2 (y=8): exercise name or instructions on left, exercise count on right
     if engine.current_exercise then
         local exercise_label = engine.current_exercise.name
         if get_exercise_side(engine.current_exercise.id) == "R" then
             exercise_label = exercise_label .. " [R]"
         end
-        draw_text(4, 10, exercise_label, COLOR.text_yellow)
+        draw_text(4, 8, exercise_label, COLOR.text_yellow)
     else
-        draw_text(4, 10, "Start=Menu  Coin=Record", COLOR.text_gray)
+        draw_text(4, 8, "Start=Menu  Coin=Record", COLOR.text_gray)
     end
 
-    draw_text(SCREEN_W - 50, 10, #exercises .. " exercises", COLOR.text_gray)
+    draw_text(SCREEN_W - 50, 8, #exercises .. " exercises", COLOR.text_gray)
 end
 
 --- Draw the live combo tracker (below header)
@@ -1871,13 +1966,13 @@ local function draw_combo_tracker()
 
     if combo_tracker.active then
         -- Active combo: solid white
-        draw_text(4, 22, text, COLOR.text_white)
+        draw_text(4, 18, text, COLOR.text_white)
     elseif combo_tracker.fade_timer > 0 then
         -- Fading out after combo drop
         local alpha = math.floor((combo_tracker.fade_timer / COMBO_FADE_FRAMES) * 0xFF)
         alpha = clamp(alpha, 0, 0xFF)
         local fade_color = 0xBBBBBB00 + alpha
-        draw_text(4, 22, text, fade_color)
+        draw_text(4, 18, text, fade_color)
     end
 end
 
@@ -1898,58 +1993,80 @@ local function draw_info_bar()
     -- Pre-compute timing summary for completed steps
     local summary = compute_timing_summary()
 
-    -- Step indicator with colored markers and timing annotations
-    local step_str = "Step: "
-    local step_x = 4
-    draw_text(step_x, bar_y + 12, step_str, COLOR.text_gray)
-    step_x = step_x + #step_str * 4  -- approximate char width
-
-    for i, step in ipairs(seq) do
-        local color
-        if i < engine.combo_index then
-            color = COLOR.step_done
-        elseif i == engine.combo_index then
-            color = COLOR.step_current
-        else
-            color = COLOR.step_pending
-        end
-
-        local bracket_l = (i == engine.combo_index) and "[" or ""
-        local bracket_r = (i == engine.combo_index) and "]" or ""
-
-        -- Build timing annotation for completed steps with reference timing
-        local timing_str = ""
-        if i < engine.combo_index and i > 1 and summary[i] and summary[i].ref_gap > 0 then
-            local delta = summary[i].delta
-            local sign = delta >= 0 and "+" or ""
-            timing_str = "(" .. sign .. delta .. "f)"
-        end
-
-        local separator = (i < #seq) and " > " or ""
-
-        -- Draw step name
-        draw_text(step_x, bar_y + 12, bracket_l .. step.name .. bracket_r, color)
-        step_x = step_x + (#bracket_l + #step.name + #bracket_r) * 4
-
-        -- Draw timing annotation in color
-        if timing_str ~= "" then
-            local tc = timing_color(summary[i].rating)
-            draw_text(step_x, bar_y + 12, timing_str, tc)
-            step_x = step_x + #timing_str * 4
-        end
-
-        -- Draw separator
-        if separator ~= "" then
-            draw_text(step_x, bar_y + 12, separator, color)
-            step_x = step_x + #separator * 4
-        end
-    end
-
-    -- Attempt counter
+    -- Pre-compute attempt counter to know available width
     local att_str = string.format("Attempt: %d  OK: %d/%d",
         engine.session_attempts,
         engine.session_completions,
         engine.session_attempts)
+
+    -- Step indicator with scrolling viewport for long combos
+    local step_label = "Step: "
+    local label_x = 4
+    draw_text(label_x, bar_y + 12, step_label, COLOR.text_gray)
+    local content_x = label_x + #step_label * 4
+    local visible_w = SCREEN_W - #att_str * 4 - 8 - content_x
+
+    -- Pass 1: calculate positions and widths for each step
+    local step_positions = {}
+    local cursor = 0
+    for i, step in ipairs(seq) do
+        local bl = (i == engine.combo_index) and "[" or ""
+        local br = (i == engine.combo_index) and "]" or ""
+        local timing = ""
+        if i < engine.combo_index and i > 1 and summary[i] and summary[i].ref_gap > 0 then
+            local delta = summary[i].delta
+            local sign = delta >= 0 and "+" or ""
+            timing = "(" .. sign .. delta .. "f)"
+        end
+        local sep = (i < #seq) and " > " or ""
+        local name_w = (#bl + #step.name + #br) * 4
+        local time_w = #timing * 4
+        local sep_w = #sep * 4
+        step_positions[i] = {
+            x = cursor, name_w = name_w, time_w = time_w, sep_w = sep_w,
+            bl = bl, br = br, timing = timing, sep = sep,
+        }
+        cursor = cursor + name_w + time_w + sep_w
+    end
+
+    -- Scroll to keep current step visible, pushing completed steps off left
+    local scroll = 0
+    if step_positions[engine.combo_index] then
+        local cp = step_positions[engine.combo_index]
+        local current_end = cp.x + cp.name_w + cp.time_w
+        if current_end > visible_w then
+            scroll = cp.x - 20  -- keep 20px peek at previous step
+        end
+    end
+    if scroll < 0 then scroll = 0 end
+
+    -- Pass 2: draw only steps within the viewport
+    for i, step in ipairs(seq) do
+        local sp = step_positions[i]
+        local dx = content_x + sp.x - scroll
+        local total_w = sp.name_w + sp.time_w + sp.sep_w
+        if dx + total_w >= content_x and dx < content_x + visible_w then
+            local color
+            if i < engine.combo_index then
+                color = COLOR.step_done
+            elseif i == engine.combo_index then
+                color = COLOR.step_current
+            else
+                color = COLOR.step_pending
+            end
+            draw_text(dx, bar_y + 12, sp.bl .. step.name .. sp.br, color)
+            dx = dx + sp.name_w
+            if sp.timing ~= "" then
+                draw_text(dx, bar_y + 12, sp.timing, timing_color(summary[i].rating))
+                dx = dx + sp.time_w
+            end
+            if sp.sep ~= "" then
+                draw_text(dx, bar_y + 12, sp.sep, color)
+            end
+        end
+    end
+
+    -- Attempt counter (right-aligned)
     draw_text(SCREEN_W - #att_str * 4 - 4, bar_y + 12, att_str, COLOR.text_white)
 
     -- Hint line
@@ -1992,6 +2109,35 @@ local function draw_timing_strip(x, y, summary, fail_step)
         local fail_mark = "X" .. fail_step
         draw_text(sx, y, fail_mark, COLOR.text_red)
     end
+end
+
+-- Category selector after exercise capture
+local cat_sel = { active = false, cursor = 1, exercise = nil }
+
+--- Draw category selector popup after exercise capture
+local function draw_category_selector()
+    if not cat_sel.active then return end
+    local num_cats = #EXERCISE_CATEGORIES
+    local row_h = 10
+    local popup_w = 100
+    local popup_h = 14 + num_cats * row_h + 12  -- title + rows + footer
+    local popup_x = (SCREEN_W - popup_w) / 2
+    local popup_y = (SCREEN_H - popup_h) / 2
+
+    draw_box(popup_x, popup_y, popup_w, popup_h, COLOR.bg_dark, COLOR.border_light)
+    draw_text(popup_x + 4, popup_y + 4, "SELECT CATEGORY:", COLOR.text_cyan)
+
+    for i, cat in ipairs(EXERCISE_CATEGORIES) do
+        local y = popup_y + 14 + (i - 1) * row_h
+        local label = CATEGORY_LABELS[cat] or cat:upper()
+        if i == cat_sel.cursor then
+            draw_text(popup_x + 6, y, "> " .. label, COLOR.text_yellow)
+        else
+            draw_text(popup_x + 14, y, label, COLOR.text_white)
+        end
+    end
+
+    draw_text(popup_x + 4, popup_y + popup_h - 10, "Jab: Confirm", COLOR.text_gray)
 end
 
 --- Draw success/fail banner
@@ -2067,12 +2213,13 @@ local function draw_result_banner()
 
         local line_y = banner_y + 4
 
-        -- Line 1: DROPPED at step N: [move_name]
+        -- Line 1: DROPPED/TIMEOUT at step N: [move_name]
         local step_name = ""
         if ex and ex.sequence and engine.fail_step_index > 0 and engine.fail_step_index <= #ex.sequence then
             step_name = ex.sequence[engine.fail_step_index].name
         end
-        local drop_msg = string.format("DROPPED at step %d: %s", engine.fail_step_index, step_name)
+        local fail_label = engine.fail_type == "timeout" and "TIMEOUT" or "DROPPED"
+        local drop_msg = string.format("%s at step %d: %s", fail_label, engine.fail_step_index, step_name)
         draw_text(bx + 4, line_y, drop_msg, COLOR.text_red)
         line_y = line_y + 10
 
@@ -2127,11 +2274,11 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
     else
         count_str = #exercises .. " exercises"
     end
-    if sort_mode ~= "category" then
-        count_str = count_str .. "  by " .. SORT_LABELS[sort_mode]
+    if menu.sort_mode ~= "category" then
+        count_str = count_str .. "  by " .. SORT_LABELS[menu.sort_mode]
     end
     draw_text(menu_x + menu_w - #count_str * 4, menu_y + 2, count_str,
-        sort_mode ~= "category" and COLOR.text_yellow or COLOR.text_gray)
+        menu.sort_mode ~= "category" and COLOR.text_yellow or COLOR.text_gray)
 
     -- Empty state
     if #ex_list == 0 then
@@ -2148,11 +2295,11 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
     -- Header row
     local header_y = menu_y + 14
     draw_text(menu_x + 20, header_y, "Name",
-        sort_mode == "name" and COLOR.text_yellow or COLOR.text_gray)
+        menu.sort_mode == "name" and COLOR.text_yellow or COLOR.text_gray)
     draw_text(col_hits, header_y, "Hits",
         COLOR.text_gray)
     draw_text(col_diff, header_y, "Diff",
-        sort_mode == "difficulty" and COLOR.text_yellow or COLOR.text_gray)
+        menu.sort_mode == "difficulty" and COLOR.text_yellow or COLOR.text_gray)
     draw_text(col_side, header_y, "Side", COLOR.text_gray)
 
     -- Content rows start below header; one fewer visible row
@@ -2164,7 +2311,7 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
     local display_rows = {}
     local last_category = nil
     for i = 1, #ex_list do
-        if sort_mode == "category" then
+        if menu.sort_mode == "category" then
             local ex = exercises[ex_list[i]]
             local cat = ex.category or "combo"
             if cat ~= last_category then
@@ -2252,7 +2399,7 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
     if ex_list[cursor] and exercises[ex_list[cursor]] then
         local desc_y = menu_y + menu_h - 10
         local sel = exercises[ex_list[cursor]]
-        if delete_confirm_id == sel.id then
+        if menu.delete_id == sel.id then
             draw_text(menu_x + 4, desc_y, "Press HK again to DELETE this exercise", COLOR.text_red)
         else
             draw_text(menu_x + 4, desc_y, sel.description or sel.name, COLOR.text_gray)
@@ -2268,7 +2415,7 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
 
         -- Character tag popup below cursor row
         if cursor_row_y and sel.characters and #sel.characters > 0
-            and delete_confirm_id ~= sel.id then
+            and menu.delete_id ~= sel.id then
             local popup_y = cursor_row_y + row_h + 1
             local popup_x = menu_x + 4
             local max_chars_per_line = math.floor((menu_w - 12) / 4)
@@ -2319,7 +2466,7 @@ local function draw_opponent_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
 end
 
 local function draw_menu()
-    if not show_menu then return end
+    if not menu.show then return end
 
     -- Position below player portraits (y~48) and above super meter (y~200)
     local menu_x = 20
@@ -2332,10 +2479,10 @@ local function draw_menu()
     draw_gradient_box(menu_x, menu_y, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
 
     -- Tab bar
-    local tab_all_color = (menu_mode == MENU_ALL_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
+    local tab_all_color = (menu.mode == MENU_ALL_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
     local char_label = selected_opponent and ("vs " .. selected_opponent.name) or "Character"
-    local tab_char_color = (menu_mode == MENU_CHAR_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
-    local tab_opp_color = (menu_mode == MENU_OPPONENT) and COLOR.text_yellow or COLOR.text_gray
+    local tab_char_color = (menu.mode == MENU_CHAR_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
+    local tab_opp_color = (menu.mode == MENU_OPPONENT) and COLOR.text_yellow or COLOR.text_gray
     local all_label = "[All]"
     local char_label_full = "[" .. char_label .. "]"
     local opp_label = "[Select Opponent]"
@@ -2348,12 +2495,12 @@ local function draw_menu()
     draw_text(x_char, menu_y + 2, char_label_full, tab_char_color)
     draw_text(x_opp, menu_y + 2, opp_label, tab_opp_color)
 
-    if menu_mode == MENU_ALL_EXERCISES then
+    if menu.mode == MENU_ALL_EXERCISES then
         draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h,
-            all_exercises_sorted, menu_cursor_all, true)
-    elseif menu_mode == MENU_CHAR_EXERCISES then
+            all_exercises_sorted, menu.cursor_all, true)
+    elseif menu.mode == MENU_CHAR_EXERCISES then
         draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h,
-            filtered_exercises, menu_cursor_char, false)
+            filtered_exercises, menu.cursor_char, false)
     else
         draw_opponent_tab(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
     end
@@ -2361,7 +2508,7 @@ end
 
 --- Draw debug info
 local function draw_debug()
-    if not show_debug then return end
+    if not menu.debug then return end
     local gs = game_state
     local y = 34
     draw_text(4, y,      "Phase: " .. gs.phase, COLOR.text_gray)
@@ -2468,10 +2615,10 @@ local function capture_stop()
         table.insert(exercises, new_exercise)
         init_progression()
         rebuild_filtered_exercises()
-        save_exercises()
-        save_progression()
-        capture_result = "EXERCISE CREATED: " .. new_exercise.name
-        capture_result_timer = 180  -- 3 seconds at 60fps
+        -- Open category selector instead of saving immediately
+        cat_sel.active = true
+        cat_sel.cursor = 1
+        cat_sel.exercise = new_exercise
         print("[Capture] Created exercise: " .. new_exercise.id .. " - " .. new_exercise.name)
     else
         capture_result = nil
@@ -2506,10 +2653,17 @@ local function capture_frame_update()
     end
 
     if new_hit then
+        local action_id = gs.p1.action_string
+        local hit_type = "H"
+        -- Aegis activation shares action_id with Sphere_throw; remap when meter was consumed
+        if res.meter_consumed and SPHERE_TO_AEGIS[action_id] then
+            action_id = SPHERE_TO_AEGIS[action_id]
+            hit_type = "F"
+        end
         capture.hit_count = capture.hit_count + 1
         table.insert(capture.sequence, {
-            action_id = gs.p1.action_string,
-            hit_type = "H",
+            action_id = action_id,
+            hit_type = hit_type,
             frame = frame_num,
         })
     end
@@ -2619,6 +2773,40 @@ local function find_charge_pattern(dir_history, charge_dirs, release_dir, min_fr
     return false
 end
 
+--- Detect a dash pattern: tap→release→tap of the same direction within a window
+--- dir_history: array of numpad directions, tap_dir: 6 (forward) or 4 (back)
+--- Returns true if a dash pattern is found
+local function find_dash_pattern(dir_history, tap_dir, max_gap)
+    max_gap = max_gap or 12
+    -- Scan backward: find last tap, then release, then earlier tap
+    local second_tap = nil
+    for i = #dir_history, 1, -1 do
+        if dir_history[i] == tap_dir then
+            second_tap = i
+            break
+        end
+    end
+    if not second_tap then return false end
+
+    -- Find release (not tap_dir) before the second tap
+    local release = nil
+    for i = second_tap - 1, math.max(1, second_tap - max_gap), -1 do
+        if dir_history[i] ~= tap_dir then
+            release = i
+            break
+        end
+    end
+    if not release then return false end
+
+    -- Find first tap before the release
+    for i = release - 1, math.max(1, second_tap - max_gap), -1 do
+        if dir_history[i] == tap_dir then
+            return true
+        end
+    end
+    return false
+end
+
 --- Detect the motion component of a move from input history
 --- input_log: table indexed by frame number -> joypad snapshot
 --- button_frame: frame number when button was pressed
@@ -2656,27 +2844,35 @@ local function detect_motion(input_log, button_frame, p1_flip)
     if find_charge_pattern(dir_history, {2, 1}, 8, 10) then
         return "d~u+", "[2]8"
     end
-    -- 3. QCF: 2→3→6
+    -- 3. Forward dash: f→neutral→f
+    if find_dash_pattern(dir_history, 6, 12) then
+        return "f,f+", "66"
+    end
+    -- 4. Back dash: b→neutral→b
+    if find_dash_pattern(dir_history, 4, 12) then
+        return "b,b+", "44"
+    end
+    -- 5. QCF: 2→3→6
     if find_sequence(dir_history, {2, 3, 6}) then
         return "qcf+", "236"
     end
-    -- 4. QCB: 2→1→4
+    -- 6. QCB: 2→1→4
     if find_sequence(dir_history, {2, 1, 4}) then
         return "qcb+", "214"
     end
-    -- 5. Crouching: last direction is 1, 2, or 3
+    -- 7. Crouching: last direction is 1, 2, or 3
     local last_dir = dir_history[#dir_history]
     if last_dir == 2 or last_dir == 1 or last_dir == 3 then
         return "d+", "2"
     end
-    -- 6. Jump: 7, 8, or 9 in recent history
+    -- 8. Jump: 7, 8, or 9 in recent history
     for i = math.max(1, #dir_history - 10), #dir_history do
         local d = dir_history[i]
         if d == 7 or d == 8 or d == 9 then
             return "j.", "j."
         end
     end
-    -- 7. Standing (default)
+    -- 9. Standing (default)
     return "", "5"
 end
 
@@ -3270,34 +3466,66 @@ local function handle_charselect_input()
     end
 end
 
+--- Handle category selector input after exercise capture
+local function handle_category_selector_input()
+    if not cat_sel.active then return end
+    local num_cats = #EXERCISE_CATEGORIES
+
+    if is_pressed("P1 Up") then
+        cat_sel.cursor = cat_sel.cursor - 1
+        if cat_sel.cursor < 1 then cat_sel.cursor = num_cats end
+    elseif is_pressed("P1 Down") then
+        cat_sel.cursor = cat_sel.cursor + 1
+        if cat_sel.cursor > num_cats then cat_sel.cursor = 1 end
+    elseif is_pressed("P1 Weak Punch") then
+        -- Confirm: apply selected category
+        cat_sel.exercise.category = EXERCISE_CATEGORIES[cat_sel.cursor]
+        save_exercises()
+        save_progression()
+        capture_result = "EXERCISE CREATED: " .. cat_sel.exercise.name
+        capture_result_timer = 180
+        cat_sel.active = false
+        cat_sel.exercise = nil
+        rebuild_filtered_exercises()
+    elseif is_pressed("P1 Start") or is_pressed("P1 Coin") then
+        -- Cancel: keep default "combo", save and close
+        save_exercises()
+        save_progression()
+        capture_result = "EXERCISE CREATED: " .. cat_sel.exercise.name
+        capture_result_timer = 180
+        cat_sel.active = false
+        cat_sel.exercise = nil
+    end
+end
+
 --- Handle menu navigation input
 local function handle_menu_input()
-    if not show_menu then return end
+    if not menu.show then return end
 
     -- Tab switching: Left/Right cycles All → Character → Opponent → All
     if is_pressed("P1 Right") then
-        if menu_mode == MENU_ALL_EXERCISES then menu_mode = MENU_CHAR_EXERCISES
-        elseif menu_mode == MENU_CHAR_EXERCISES then menu_mode = MENU_OPPONENT
-        else menu_mode = MENU_ALL_EXERCISES end
-        delete_confirm_id = nil
+        if menu.mode == MENU_ALL_EXERCISES then menu.mode = MENU_CHAR_EXERCISES
+        elseif menu.mode == MENU_CHAR_EXERCISES then menu.mode = MENU_OPPONENT
+        else menu.mode = MENU_ALL_EXERCISES end
+        menu.delete_id = nil
         return
     elseif is_pressed("P1 Left") then
-        if menu_mode == MENU_ALL_EXERCISES then menu_mode = MENU_OPPONENT
-        elseif menu_mode == MENU_OPPONENT then menu_mode = MENU_CHAR_EXERCISES
-        else menu_mode = MENU_ALL_EXERCISES end
-        delete_confirm_id = nil
+        if menu.mode == MENU_ALL_EXERCISES then menu.mode = MENU_OPPONENT
+        elseif menu.mode == MENU_OPPONENT then menu.mode = MENU_CHAR_EXERCISES
+        else menu.mode = MENU_ALL_EXERCISES end
+        menu.delete_id = nil
         return
     end
 
-    if menu_mode == MENU_ALL_EXERCISES or menu_mode == MENU_CHAR_EXERCISES then
+    if menu.mode == MENU_ALL_EXERCISES or menu.mode == MENU_CHAR_EXERCISES then
         -- Determine active list and cursor based on tab
         local ex_list, cur
-        if menu_mode == MENU_ALL_EXERCISES then
+        if menu.mode == MENU_ALL_EXERCISES then
             ex_list = all_exercises_sorted
-            cur = menu_cursor_all
+            cur = menu.cursor_all
         else
             ex_list = filtered_exercises
-            cur = menu_cursor_char
+            cur = menu.cursor_char
         end
 
         -- Exercise menu navigation
@@ -3306,26 +3534,26 @@ local function handle_menu_input()
                 cur = cur - 1
                 if cur < 1 then cur = #ex_list end
             end
-            delete_confirm_id = nil
+            menu.delete_id = nil
         elseif is_pressed("P1 Down") then
             if #ex_list > 0 then
                 cur = cur + 1
                 if cur > #ex_list then cur = 1 end
             end
-            delete_confirm_id = nil
+            menu.delete_id = nil
         elseif is_pressed("P1 Weak Punch") then
-            delete_confirm_id = nil
+            menu.delete_id = nil
             if ex_list[cur] then
                 select_exercise(ex_list[cur])
-                show_menu = false
+                menu.show = false
             end
         elseif is_pressed("P1 Medium Punch") then
-            delete_confirm_id = nil
+            menu.delete_id = nil
             if engine.state ~= STATE_IDLE then
                 engine.state = STATE_IDLE
                 engine.current_exercise = nil
             else
-                show_menu = false
+                menu.show = false
             end
         elseif is_pressed("P1 Strong Kick") then
             -- Delete exercise (requires double-press to confirm)
@@ -3334,33 +3562,33 @@ local function handle_menu_input()
             if sel then
                 if sel.shipped then
                     print("[Urien Lab] Shipped exercises can't be deleted")
-                    delete_confirm_id = nil
-                elseif delete_confirm_id == sel.id then
+                    menu.delete_id = nil
+                elseif menu.delete_id == sel.id then
                     table.remove(exercises, real_idx)
                     progression[sel.id] = nil
                     rebuild_filtered_exercises()
                     save_exercises()
                     save_progression()
-                    delete_confirm_id = nil
+                    menu.delete_id = nil
                     print("[Urien Lab] Deleted exercise: " .. sel.name)
                 else
-                    delete_confirm_id = sel.id
+                    menu.delete_id = sel.id
                 end
             end
         elseif is_pressed("P1 Strong Punch") then
             -- Cycle sort mode: category → difficulty → name → category
-            delete_confirm_id = nil
+            menu.delete_id = nil
             local saved_ex_idx = ex_list[cur]  -- remember which exercise is selected
             for si, sm in ipairs(SORT_MODES) do
-                if sm == sort_mode then
-                    sort_mode = SORT_MODES[(si % #SORT_MODES) + 1]
+                if sm == menu.sort_mode then
+                    menu.sort_mode = SORT_MODES[(si % #SORT_MODES) + 1]
                     break
                 end
             end
             rebuild_filtered_exercises()
             -- Restore cursor to same exercise in new sort order
             if saved_ex_idx then
-                local new_list = (menu_mode == MENU_ALL_EXERCISES) and all_exercises_sorted or filtered_exercises
+                local new_list = (menu.mode == MENU_ALL_EXERCISES) and all_exercises_sorted or filtered_exercises
                 for ni, idx in ipairs(new_list) do
                     if idx == saved_ex_idx then
                         cur = ni
@@ -3405,10 +3633,10 @@ local function handle_menu_input()
         end
 
         -- Write cursor back to the correct variable
-        if menu_mode == MENU_ALL_EXERCISES then
-            menu_cursor_all = cur
+        if menu.mode == MENU_ALL_EXERCISES then
+            menu.cursor_all = cur
         else
-            menu_cursor_char = cur
+            menu.cursor_char = cur
         end
     else
         -- Opponent tab
@@ -3417,7 +3645,7 @@ local function handle_menu_input()
             charselect_visible = true
             engine.state = STATE_IDLE
             engine.current_exercise = nil
-            show_menu = false
+            menu.show = false
         elseif is_pressed("P1 Strong Punch") then
             if selected_opponent and game_state.playing then
                 for i, char in ipairs(CHARACTERS) do
@@ -3432,7 +3660,7 @@ local function handle_menu_input()
                 engine.state = STATE_IDLE
                 engine.current_exercise = nil
             else
-                show_menu = false
+                menu.show = false
             end
         end
     end
@@ -3440,12 +3668,18 @@ end
 
 --- Handle general input
 local function handle_input()
+    -- Category selector blocks all other input while active
+    if cat_sel.active then
+        handle_category_selector_input()
+        return
+    end
+
     -- Start button toggles menu
     if is_pressed("P1 Start") then
-        if show_menu then
-            show_menu = false
+        if menu.show then
+            menu.show = false
         else
-            show_menu = true
+            menu.show = true
             -- Pause exercise when opening menu
             if engine.state == STATE_ACTIVE then
                 engine.state = STATE_SETUP
@@ -3459,7 +3693,7 @@ local function handle_input()
         capture_toggle()
     end
 
-    if show_menu then
+    if menu.show then
         handle_menu_input()
     end
 end
@@ -3572,7 +3806,7 @@ local function on_frame()
 
     handle_input()
 
-    if not show_menu then
+    if not menu.show then
         engine_update()
         capture_frame_update()
     end
@@ -3608,12 +3842,32 @@ local function on_gui()
         -- Freeze round timer (infinite time)
         memory.writebyte(MEM.round_timer, 100)
 
-        -- Always-on training resources: delayed HP/stun recovery, meter full
-        fill_meter_full()
+        -- Meter: refill to max after inactivity (no P1 input, no combo)
+        local actual_bars = memory.readbyte(MEM.meter_count)
+        if actual_bars < res.prev_bars then
+            res.meter_consumed = true
+            res.meter_refill = 0
+        end
+        local any_input = false
+        for _, val in pairs(input_current) do
+            if val == true then any_input = true; break end
+        end
+        if game_state.combo_counter > 0 or any_input then
+            res.meter_refill = 0
+        elseif actual_bars < (memory.readbyte(MEM.max_meter_count) or 2) then
+            res.meter_refill = res.meter_refill + 1
+            if res.meter_refill > METER_REFILL_DELAY_FRAMES then
+                fill_meter_full()
+                res.meter_consumed = false
+            end
+        end
+        res.prev_bars = actual_bars
+
+        -- Always-on training resources: delayed HP/stun recovery
         if game_state.combo_counter == 0 then
-            recovery_timer = recovery_timer + 1
-            stun_reset_timer = stun_reset_timer + 1
-            if recovery_timer > RECOVERY_DELAY_FRAMES then
+            res.recovery = res.recovery + 1
+            res.stun_reset = res.stun_reset + 1
+            if res.recovery > RECOVERY_DELAY_FRAMES then
                 local p1_hp = memory.readbyte(MEM.p1_life)
                 local p2_hp = memory.readbyte(MEM.p2_life)
                 if p1_hp < LIFE_FULL then
@@ -3623,12 +3877,12 @@ local function on_gui()
                     memory.writebyte(MEM.p2_life, math.min(p2_hp + LIFE_RECOVERY_SPEED, LIFE_FULL))
                 end
             end
-            if stun_reset_timer > STUN_RESET_DELAY_FRAMES then
+            if res.stun_reset > STUN_RESET_DELAY_FRAMES then
                 reset_stun()
             end
         else
-            recovery_timer = 0
-            stun_reset_timer = 0
+            res.recovery = 0
+            res.stun_reset = 0
             -- Keep P2 alive during combos
             if memory.readbyte(MEM.p2_life) < 0x10 then
                 memory.writebyte(MEM.p2_life, 0x10)
@@ -3660,8 +3914,10 @@ local function on_gui()
     draw_menu()
     draw_debug()
 
-    -- Exercise creation confirmation banner
-    if capture_result and capture_result_timer > 0 then
+    -- Category selector or exercise creation banner
+    if cat_sel.active then
+        draw_category_selector()
+    elseif capture_result and capture_result_timer > 0 then
         capture_result_timer = capture_result_timer - 1
         local banner_y = 32
         draw_box(20, banner_y, SCREEN_W - 40, 16, 0x003366D0, COLOR.text_cyan)
@@ -3811,7 +4067,7 @@ savestate.registerload(on_savestate_load)
 -- Alt+1 = Return to character select / save character select state
 input.registerhotkey(1, function()
     if start_character_select() then
-        show_menu = false
+        menu.show = false
     end
 end)
 
@@ -3833,13 +4089,13 @@ end)
 
 -- Alt+4 = Toggle debug display
 input.registerhotkey(4, function()
-    show_debug = not show_debug
+    menu.debug = not menu.debug
 end)
 
 -- Alt+5 = Toggle menu (reliable fallback if Start conflicts with game)
 input.registerhotkey(5, function()
-    show_menu = not show_menu
-    if show_menu and engine.state == STATE_ACTIVE then
+    menu.show = not menu.show
+    if menu.show and engine.state == STATE_ACTIVE then
         engine.state = STATE_SETUP
         engine.setup_timer = SETUP_DELAY_FRAMES
     end
@@ -3847,13 +4103,13 @@ end)
 
 -- Alt+6 = Quick save matchup to current slot
 input.registerhotkey(6, function()
-    save_matchup(matchup_cursor)
+    save_matchup(menu.matchup_cursor)
 end)
 
 -- Alt+7 = Rename current matchup slot (via console)
 input.registerhotkey(7, function()
-    local slot = matchup_slots[matchup_cursor]
-    print("[Urien Lab] Current slot " .. matchup_cursor .. " name: " .. slot.name)
+    local slot = matchup_slots[menu.matchup_cursor]
+    print("[Urien Lab] Current slot " .. menu.matchup_cursor .. " name: " .. slot.name)
     print("[Urien Lab] To rename, edit " .. MATCHUP_FILE .. " directly")
 end)
 
