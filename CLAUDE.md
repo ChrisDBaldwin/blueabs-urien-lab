@@ -44,7 +44,7 @@ Organized into numbered sections:
 | [11c3] Exercise Builder | Record-to-Exercise — converts captured combos into playable exercise definitions |
 | [11c4] Exercise Persistence | Save/load exercises to `urien_lab_exercises.txt` and `urien_lab_custom.txt` |
 | [12] Main Loop Callbacks | `on_frame()` (input + state machines), `on_gui()` (draw + memory writes) |
-| [13] Hook Registration | FBNeo callbacks, hotkeys, file migration, initialization |
+| [13] Hook Registration | FBNeo callbacks, hotkeys, initialization |
 
 ### Frame Callback Split (critical)
 

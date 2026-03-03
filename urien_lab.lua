@@ -369,18 +369,6 @@ local konami = {
 -- Temp slot used for all save/load operations (file gets renamed to descriptive name)
 local TEMP_SLOT = 99999
 
--- Legacy slot mapping for migration (char_id -> old slot number)
-local LEGACY_SLOT_MAP = {
-    [3]  = 1,   -- Yun
-    [4]  = 2,   -- Dudley
-    [15] = 3,   -- Ken
-    [10] = 4,   -- Makoto
-    [6]  = 5,   -- Hugo
-    [9]  = 6,   -- Oro
-    [18] = 7,   -- Q
-    [1]  = 8,   -- Alex
-}
-
 --- Get the named save file path for a character
 local function char_save_path(char)
     return "vs_" .. char.name .. ".fs"
@@ -1514,42 +1502,6 @@ local function start_character_select()
     charselect_visible = false  -- hide script overlay, show game's native screen
     print("[Urien Lab] Character select -- pick your fighters!")
     return true
-end
-
---- Migrate old numbered save files to named format (vs_CharName.fs)
-local function migrate_legacy_saves()
-    local migrated = 0
-    for _, char in ipairs(CHARACTERS) do
-        local new_path = char_save_path(char)
-        -- Skip if named file already exists
-        if not file_exists(new_path) then
-            -- Find the old file: try legacy slot (1-8), then dynamic slot (9000+id)
-            local old_name = nil
-            if LEGACY_SLOT_MAP[char.id] then
-                local legacy = tostring(LEGACY_SLOT_MAP[char.id])
-                if file_exists(legacy) then
-                    old_name = legacy
-                end
-            end
-            if not old_name then
-                local dyn = tostring(CHAR_SLOT_BASE + char.id)
-                if file_exists(dyn) then
-                    old_name = dyn
-                end
-            end
-            if old_name then
-                if os.rename(old_name, new_path) then
-                    char_states[char.id] = { saved = true }
-                    migrated = migrated + 1
-                    print("[Urien Lab] Migrated: " .. old_name .. " -> " .. new_path)
-                end
-            end
-        end
-    end
-    if migrated > 0 then
-        print("[Urien Lab] Migrated " .. migrated .. " save files to named format")
-        save_char_metadata()
-    end
 end
 
 local function save_char_metadata()
@@ -3954,94 +3906,6 @@ end
 -- [13] HOOK REGISTRATION
 -- ============================================================================
 
--- Migrate old file names and custom exercises
--- Wrapped in do..end with local functions so body locals use their own 200-limit scope
-do
-    local function migrate_file_names()
-        local renames = {
-            {"learn_urien_save.txt", SAVE_FILE},
-            {"learn_urien_matchups.txt", MATCHUP_FILE},
-            {"learn_urien_characters.txt", CHAR_SAVE_FILE},
-            {"learn_urien_custom_drills.txt", EXERCISE_FILE},
-            {"urien_lab_custom_drills.txt", EXERCISE_FILE},
-        }
-        for _, pair in ipairs(renames) do
-            if file_exists(pair[1]) and not file_exists(pair[2]) then
-                os.rename(pair[1], pair[2])
-                print("[Urien Lab] Migrated: " .. pair[1] .. " -> " .. pair[2])
-            end
-        end
-    end
-
-    local function migrate_custom_exercises()
-        if file_exists(CUSTOM_EXERCISE_FILE) then return end
-        local f = io.open(EXERCISE_FILE, "r")
-        if not f then return end
-        local content = f:read("*a")
-        f:close()
-
-        local shipped_blocks = {}
-        local custom_blocks = {}
-        local has_custom = false
-
-        local current_block = {}
-        local in_block = false
-        for line in content:gmatch("[^\n]+") do
-            if line == "---" then
-                if in_block and #current_block > 0 then
-                    local block_text = table.concat(current_block, "\n")
-                    local id = block_text:match("ID:(c_%d+)")
-                    if id then
-                        table.insert(custom_blocks, block_text)
-                        has_custom = true
-                    else
-                        table.insert(shipped_blocks, block_text)
-                    end
-                    current_block = {}
-                    in_block = false
-                else
-                    in_block = true
-                    current_block = {}
-                end
-            elseif in_block then
-                table.insert(current_block, line)
-            end
-        end
-
-        if not has_custom then return end
-
-        local cf = io.open(CUSTOM_EXERCISE_FILE, "w")
-        if cf then
-            cf:write("# Urien Lab Custom Exercises\n")
-            cf:write("# Your captured and custom exercises (not overwritten by updates)\n")
-            cf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
-            for _, block in ipairs(custom_blocks) do
-                cf:write("---\n")
-                cf:write(block .. "\n")
-                cf:write("---\n")
-            end
-            cf:close()
-            print("[Urien Lab] Migrated " .. #custom_blocks .. " custom exercises to " .. CUSTOM_EXERCISE_FILE)
-        end
-
-        local sf = io.open(EXERCISE_FILE, "w")
-        if sf then
-            sf:write("# Urien Lab Exercises\n")
-            sf:write("# Shipped exercises (updated automatically, do not add custom exercises here)\n")
-            sf:write("# CATEGORY: combo | unblockable | sequence | parry\n")
-            for _, block in ipairs(shipped_blocks) do
-                sf:write("---\n")
-                sf:write(block .. "\n")
-                sf:write("---\n")
-            end
-            sf:close()
-        end
-    end
-
-    migrate_file_names()
-    migrate_custom_exercises()
-end
-
 -- Check for script updates from GitHub
 check_for_updates()
 
@@ -4052,7 +3916,6 @@ load_progression()
 rebuild_filtered_exercises()
 load_matchup_metadata()
 load_char_metadata()
-migrate_legacy_saves()
 
 -- Register FBNeo callbacks
 emu.registerbefore(on_frame)
