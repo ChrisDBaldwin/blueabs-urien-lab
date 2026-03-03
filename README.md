@@ -131,7 +131,7 @@ Two state machines drive the script:
 Built on work from the SF3:3S Lua community:
 
 - [**3rd_training_lua**](https://github.com/Grouflon/3rd_training_lua) by Grouflon — memory map, drawing conventions, resource management
-- [**SF3 3rd Strike Trial Script**](https://ameblo.jp/3fv/entry-12747992757.html) by 3fv — action ID format and hit detection approach
+- [**SF3 3rd Strike Trial Script**](https://ameblo.jp/3fv/entry-12747992757.html) by crystal_cube99 — action ID format and hit detection approach
 
 ## Contributing
 
