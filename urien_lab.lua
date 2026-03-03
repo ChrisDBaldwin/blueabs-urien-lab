@@ -1983,12 +1983,9 @@ local function draw_info_bar()
 
     local ex = engine.current_exercise
     local seq = ex.sequence
-    local bar_y = SCREEN_H - 40
+    local bar_y = SCREEN_H - 30
 
-    draw_box(0, bar_y, SCREEN_W, 40, COLOR.bg_panel, COLOR.border)
-
-    -- Notation line
-    draw_text(4, bar_y + 2, "DO: " .. get_notation(ex), COLOR.text_white)
+    draw_box(0, bar_y, SCREEN_W, 30, COLOR.bg_panel, COLOR.border)
 
     -- Pre-compute timing summary for completed steps
     local summary = compute_timing_summary()
@@ -2002,7 +1999,7 @@ local function draw_info_bar()
     -- Step indicator with scrolling viewport for long combos
     local step_label = "Step: "
     local label_x = 4
-    draw_text(label_x, bar_y + 12, step_label, COLOR.text_gray)
+    draw_text(label_x, bar_y + 2, step_label, COLOR.text_gray)
     local content_x = label_x + #step_label * 4
     local visible_w = SCREEN_W - #att_str * 4 - 8 - content_x
 
@@ -2054,20 +2051,20 @@ local function draw_info_bar()
             else
                 color = COLOR.step_pending
             end
-            draw_text(dx, bar_y + 12, sp.bl .. step.name .. sp.br, color)
+            draw_text(dx, bar_y + 2, sp.bl .. step.name .. sp.br, color)
             dx = dx + sp.name_w
             if sp.timing ~= "" then
-                draw_text(dx, bar_y + 12, sp.timing, timing_color(summary[i].rating))
+                draw_text(dx, bar_y + 2, sp.timing, timing_color(summary[i].rating))
                 dx = dx + sp.time_w
             end
             if sp.sep ~= "" then
-                draw_text(dx, bar_y + 12, sp.sep, color)
+                draw_text(dx, bar_y + 2, sp.sep, color)
             end
         end
     end
 
     -- Attempt counter (right-aligned)
-    draw_text(SCREEN_W - #att_str * 4 - 4, bar_y + 12, att_str, COLOR.text_white)
+    draw_text(SCREEN_W - #att_str * 4 - 4, bar_y + 2, att_str, COLOR.text_white)
 
     -- Hint line
     if ex.hints and #ex.hints > 0 then
@@ -2077,7 +2074,7 @@ local function draw_info_bar()
         if prog and prog.attempts > 3 and #ex.hints > 1 then
             hint_idx = ((prog.attempts - 1) % #ex.hints) + 1
         end
-        draw_text(4, bar_y + 24, "Hint: " .. ex.hints[hint_idx], COLOR.text_orange)
+        draw_text(4, bar_y + 14, "Hint: " .. ex.hints[hint_idx], COLOR.text_orange)
     end
 end
 
