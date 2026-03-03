@@ -139,8 +139,9 @@ Built on work from the SF3:3S Lua community:
 
 1. Record a combo with **Coin**
 2. Test that it detects reliably
-3. Clean up the name and hint in `urien_lab_exercises.txt`
-4. Submit a PR
+3. Copy your combo from `urien_lab_custom.txt` and paste it into `urien_lab_exercises.txt`
+4. Clean up the name and hint in `urien_lab_exercises.txt`
+5. Submit a PR
 
 ### Add missing moves
 
