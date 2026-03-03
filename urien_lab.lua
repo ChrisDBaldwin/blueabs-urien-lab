@@ -34,7 +34,7 @@
 -- [1] CONSTANTS & CONFIG
 -- ============================================================================
 
-local SCRIPT_VERSION = "0.5.1"
+local SCRIPT_VERSION = "0.6.0"
 local EXERCISES_VERSION = 1
 local SAVE_FILE = "urien_lab_save.txt"
 local CAPTURE_FILE = "captured_exercises.txt"
