@@ -54,20 +54,5 @@ SUCCESS:2
 TIMING:0,13
 HINT:be close to the opponent
 ---
----
-ID:u_00
-NAME:Standard Shoto
-NOTATION_SF:d+HP, b~f+MK, qcf+HP, b~f+HK, b~f+HK, qcf+HP (SA3), b~f+HK, d~u+MP, MK, d+HP, d+PP, d+HP, d+HP, d+HP, b~f+MK
-NOTATION_NP:2HP, [4]6MK, 236HP, [4]6HK, [4]6HK, 236HP(SA3), [4]6HK, [2]8MP, 5MK, 2HP, 2PP, 2HP, 2HP, 2HP, [4]6MK
-DIFFICULTY:5
-CATEGORY:unblockable
-CHARS:Ken
-SETUP:0B7C,FFFFDBD4,A0,A0,full,1,1,stand,1
-SEQ:cr.HP,H,A00180018|M.Tackle,H,S003b003b|H.Sphere_throw,H,S00400040|H.Tackle,H,S003c003c|H.Tackle,H,S003c003c|H.Aegis,F,F077d|H.Tackle,H,S003c003c|M.Headbutt,H,S002a002a|MK,H,A000e000e|d+HP,H,A000e000e|d+PP,H,A000e000e|d+HP,H,A000e000e|cr.HP,H,A00180018|cr.HP,H,A00180018|M.Tackle,H,S003b003b
-SUCCESS:15
-TIMEOUT:900
-RESETOK:1
-TIMING:0,55,24,65,21,1,9,40,63,16,10,13,5,9,47
-HINT:d+HP -> b~f+MK -> qcf+HP -> b~f+HK -> b~f+HK -> qcf+HP (SA3) -> b~f+HK -> d~u+MP -> MK -> d+HP -> d+PP -> d+HP -> d+HP -> d+HP -> b~f+MK
----
+
 
