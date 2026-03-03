@@ -1,17 +1,3 @@
 # Urien Lab Custom Exercises
 # Your captured and custom exercises (not overwritten by updates)
 # CATEGORY: combo | unblockable | sequence | parry
----
-ID:c_05
-NAME:cr.HP > M.Tackle > H.Aegis > H.Tackle...
-NOTATION_SF:d+HP, b~f+MK, qcf+HP (SA3), b~f+HK, b~f+HK, qcf+HP (SA3), b~f+HK, d~u+MP, MK, d+HP, d+HP, d+HP, d+HP, d+HP, b~f+MK
-NOTATION_NP:2HP, [4]6MK, 236HP(SA3), [4]6HK, [4]6HK, 236HP(SA3), [4]6HK, [2]8MP, 5MK, 2HP, 2HP, 2HP, 2HP, 2HP, [4]6MK
-DIFFICULTY:5
-CATEGORY:unblockable
-CHARS:Ken
-SETUP:FFFFBDC0,FFFFEE6A,A0,A0,full,1,1,stand,1
-SEQ:cr.HP,H,A00180018|M.Tackle,H,S003b003b|H.Aegis,F,F077d|H.Tackle,H,S003c003c|H.Tackle,H,S003c003c|H.Aegis,F,F077d|H.Tackle,H,S003c003c|M.Headbutt,H,S002a002a|MK,H,A000e000e|d+HP,H,A000e000e|d+HP,H,A000e000e|d+HP,H,A000e000e|cr.HP,H,A00180018|cr.HP,H,A00180018|M.Tackle,H,S003b003b
-SUCCESS:15
-TIMING:0,56,23,66,21,1,9,39,65,15,9,14,9,9,46
-HINT:d+HP -> b~f+MK -> qcf+HP (SA3) -> b~f+HK -> b~f+HK -> qcf+HP (SA3) -> b~f+HK -> d~u+MP -> MK -> d+HP -> d+HP -> d+HP -> d+HP -> d+HP -> b~f+MK
----
