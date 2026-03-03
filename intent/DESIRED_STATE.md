@@ -4,27 +4,17 @@
 
 One Lua file. Download it, load it in FBNeo, the script fetches everything it needs on launch. No zips, no repos, no manual file management.
 
-### Approach
+### Status: Manifest implemented
 
-1. Script fetches a manifest from `voidtalker.com/urien-lab/manifest.json`
-2. Compares against local files, downloads what's new or missing
-3. Works offline from cached files if network is unavailable
+`manifest.txt` at `voidtalker.com/urien-lab/manifest.txt` — fetched once on boot, drives all sync decisions:
+- Script version check (downloads from GitHub only when manifest says newer)
+- Exercise version check (decoupled from script updates)
+- Save state availability list (avoids blind 404s on download)
 
-### Technical
+### Remaining
 
-FBNeo Lua has `os.execute`. Windows: PowerShell `Invoke-WebRequest`. Linux/Mac: `curl`.
-
-### Outcomes
-
-- Save state distribution (new users never touch `.fs` files)
-- Updated curriculum — push exercise updates, everyone gets them
-- Script auto-update
 - Community exercises: submit, review, ship
 - Character expansion (same infrastructure for future labs)
-
-### First Step
-
-On first launch, if `character_select.fs` is missing, fetch it from voidtalker.com.
 
 ---
 

@@ -18,8 +18,9 @@
 - Three-tab menu (All / Character / Opponent), dual notation, live combo tracker
 - Opponent tagging, exercise side toggle (L/R), timing feedback on cancel windows (color-coded: green/yellow/orange)
 - Exercise deletion from menu, editable exercise files with hot-reload (Alt+9)
-- Auto-update from GitHub (version check on boot, replaces script + shipped exercises if newer)
-- Save state distribution from voidtalker.com (downloads `character_select.fs` and `vs_*.fs` on demand)
+- Manifest-based content sync from voidtalker.com (`manifest.txt` checked on boot for script version, exercise version, and available save states)
+- Auto-update from GitHub (downloads script and exercises only when manifest indicates newer versions)
+- Save state distribution from voidtalker.com (downloads `character_select.fs` and `vs_*.fs` on demand, validated against manifest)
 - Custom exercise file separation (`urien_lab_custom.txt` — never overwritten by updates)
 - Konami code easter egg (enables turbo charge — continuous charge fill during exercises)
 
@@ -37,10 +38,10 @@ These are regression-critical behaviors. Violating any of these will silently br
 
 2. **Always-on training resources run every frame** when game phase = playing, regardless of exercise state:
    - Round timer frozen at 99 (write `100` to `0x02011377`)
-   - Super meter always full
-   - Stun always cleared (both players)
+   - Super meter refills to max after 90 frames of no input and no active combo (`METER_REFILL_DELAY_FRAMES`)
+   - Stun cleared after 40-frame delay once combo drops (`STUN_RESET_DELAY_FRAMES`)
    - P2 kept alive during combos (min `0x10` HP)
-   - HP recovers after combo drops with configurable delay and speed
+   - HP recovers after combo drops with configurable delay (20 frames) and speed (+8/frame)
 
 3. **Combo counter drop triggers FAIL.** When combo counter goes from >0 to 0, the exercise fails — unless `allow_combo_reset` is set (for multi-combo Aegis setups where the counter legitimately resets between sequences).
 
@@ -79,12 +80,15 @@ These are regression-critical behaviors. Violating any of these will silently br
 | Start | Open/close exercise menu |
 | Left/Right | Switch menu tabs (All / Character / Opponent) |
 | Up/Down | Navigate exercises |
-| Jab (P1 Weak Punch) | Select exercise / Change opponent (in Opponent tab) |
+| Jab (P1 Weak Punch) | Select exercise (Opponent tab: return to character select) |
 | Strong (P1 Medium Punch) | Stop exercise / Close menu |
-| Fierce (P1 Strong Punch) | Delete exercise (press twice to confirm) |
+| Fierce (P1 Strong Punch) | Cycle sort mode (Category / Difficulty / Name) |
+| Roundhouse (P1 Strong Kick) | Delete exercise (press twice to confirm) |
 | Weak Kick | Toggle exercise side (L/R) |
 | Medium Kick | Tag/untag current opponent on highlighted exercise |
 | Coin | Toggle record-to-exercise capture |
+
+The menu displays a button guide at the bottom: **MP=Stop, HP=Sort, LK=Side, MK=Tag, HK=Del**.
 
 ### Hotkeys (Alt+N)
 
@@ -101,7 +105,7 @@ These are regression-critical behaviors. Violating any of these will silently br
 
 ### Secret
 
-Konami code (Up Up Down Down Left Right Left Right on P1 D-Pad) toggles turbo charge — continuous charge fill during exercises.
+Konami code (Up Up Down Down Left Right Left Right Weak Kick Weak Punch Start on P1) toggles turbo charge — continuous charge fill during exercises.
 
 ## Record-to-Exercise Flow
 
@@ -112,7 +116,7 @@ Konami code (Up Up Down Down Left Right Left Right on P1 D-Pad) toggles turbo ch
    - Unknown moves get notation inferred from joypad edge detection (`detect_motion` + `detect_button`)
    - Multi-hit moves collapsed into a single sequence step
    - N/M/G/T-prefix entries filtered out (state transitions, not player moves)
-4. The new exercise appears in the exercise menu under the COMBO category
+4. A category selector popup appears (COMBO / UNBLOCKABLE / SEQUENCE / PARRY) — Up/Down to pick, Jab to confirm, Start or Coin to cancel (defaults to COMBO)
 5. Exercises persist to `urien_lab_custom.txt` and reload on script restart
 6. To rename: edit the `NAME:` line in `urien_lab_custom.txt` and press **Alt+9** to reload
-7. Delete: highlight in menu, press Fierce twice to confirm
+7. Delete: highlight in menu, press Roundhouse (HK) twice to confirm

@@ -35,6 +35,7 @@
 -- ============================================================================
 
 local SCRIPT_VERSION = "0.5.1"
+local EXERCISES_VERSION = 1
 local SAVE_FILE = "urien_lab_save.txt"
 local CAPTURE_FILE = "captured_exercises.txt"
 local MATCHUP_FILE = "urien_lab_matchups.txt"
@@ -80,6 +81,7 @@ local exercise_counter = 0
 -- Update & distribution URLs
 local GITHUB_RAW_URL  = "https://raw.githubusercontent.com/ChrisDBaldwin/blueabs-urien-lab/main/"
 local SAVES_BASE_URL  = "https://voidtalker.com/urien-lab/"
+local MANIFEST_URL    = SAVES_BASE_URL .. "manifest.txt"
 
 -- Exercise categories (display order)
 local EXERCISE_CATEGORIES = {"combo", "unblockable", "sequence", "parry"}
@@ -191,43 +193,72 @@ local function parse_version(str)
     return tonumber(major) * 10000 + tonumber(minor) * 100 + tonumber(patch)
 end
 
---- Check GitHub for a newer version of the script. Called once at boot.
-local function check_for_updates()
-    local tmp_file = "urien_lab.lua.tmp"
-    if not download_file(GITHUB_RAW_URL .. "urien_lab.lua", tmp_file) then
-        os.remove(tmp_file)
-        return
+--- Module-level manifest data (populated by sync_from_manifest)
+local manifest_saves = nil
+
+--- Fetch manifest.txt from voidtalker. Returns parsed table or nil on failure.
+local function fetch_manifest()
+    local tmp = "manifest.txt.tmp"
+    if not download_file(MANIFEST_URL, tmp) then
+        os.remove(tmp)
+        return nil
     end
-    -- Read remote version from first 100 lines
-    local f = io.open(tmp_file, "r")
-    if not f then os.remove(tmp_file) return end
-    local remote_version = nil
-    for i = 1, 100 do
-        local line = f:read("*l")
-        if not line then break end
-        local ver = line:match('^local SCRIPT_VERSION%s*=%s*"([%d%.]+)"')
-        if ver then
-            remote_version = ver
-            break
+    local f = io.open(tmp, "r")
+    if not f then os.remove(tmp) return nil end
+    local result = { saves = {} }
+    for line in f:lines() do
+        local key, val = line:match("^(%S+):(.+)$")
+        if key == "SCRIPT_VERSION" then
+            result.script_version = val
+        elseif key == "EXERCISES_VERSION" then
+            result.exercises_version = tonumber(val)
+        elseif key == "SAVE" then
+            result.saves[#result.saves + 1] = val
         end
     end
     f:close()
-    local remote_num = parse_version(remote_version)
-    local local_num = parse_version(SCRIPT_VERSION)
-    if remote_num > local_num then
-        -- Replace script with newer version
-        os.remove("urien_lab.lua")
-        os.rename(tmp_file, "urien_lab.lua")
-        -- Also update shipped exercises
-        download_file(GITHUB_RAW_URL .. "urien_lab_exercises.txt", EXERCISE_FILE)
-        print("[Urien Lab] Updated to v" .. remote_version .. " -- reload script to apply")
-    else
-        os.remove(tmp_file)
+    os.remove(tmp)
+    return result
+end
+
+--- Sync script, exercises, and save state list from manifest. Called once at boot.
+local function sync_from_manifest()
+    local manifest = fetch_manifest()
+    if not manifest then return end
+    -- Script update
+    if manifest.script_version then
+        local remote_num = parse_version(manifest.script_version)
+        local local_num = parse_version(SCRIPT_VERSION)
+        if remote_num > local_num then
+            local tmp_file = "urien_lab.lua.tmp"
+            if download_file(GITHUB_RAW_URL .. "urien_lab.lua", tmp_file) then
+                os.remove("urien_lab.lua")
+                os.rename(tmp_file, "urien_lab.lua")
+                print("[Urien Lab] Updated to v" .. manifest.script_version .. " -- reload script to apply")
+            else
+                os.remove(tmp_file)
+            end
+        end
+    end
+    -- Exercise update (decoupled from script updates)
+    if manifest.exercises_version and manifest.exercises_version > EXERCISES_VERSION then
+        if download_file(GITHUB_RAW_URL .. "urien_lab_exercises.txt", EXERCISE_FILE) then
+            print("[Urien Lab] Updated exercises to v" .. manifest.exercises_version)
+        end
+    end
+    -- Store available saves for on-demand download
+    if #manifest.saves > 0 then
+        manifest_saves = {}
+        for _, name in ipairs(manifest.saves) do
+            manifest_saves[name] = true
+        end
     end
 end
 
 --- Download a single .fs save state from voidtalker. Returns true on success.
 local function fetch_save_state(filename)
+    -- If manifest was loaded, only download files it lists (avoids 404s)
+    if manifest_saves and not manifest_saves[filename] then return false end
     if download_file(SAVES_BASE_URL .. filename, filename) then
         print("[Urien Lab] Downloaded save state: " .. filename)
         return true
@@ -3906,8 +3937,8 @@ end
 -- [13] HOOK REGISTRATION
 -- ============================================================================
 
--- Check for script updates from GitHub
-check_for_updates()
+-- Sync content from manifest (script updates, exercises, save state list)
+sync_from_manifest()
 
 -- Load exercises FIRST (before progression, so init_progression sees exercise IDs)
 load_exercises()
