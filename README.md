@@ -1,4 +1,4 @@
-# Blueabs Urien Lab
+# BlueAbs Urien Lab
 
 A Lua training script for **Urien** in **Street Fighter III: 3rd Strike** on [FBNeo](https://github.com/finalburnneo/FBNeo).
 
