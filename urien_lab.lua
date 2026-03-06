@@ -1183,8 +1183,6 @@ local function engine_active_update()
         local new_hit = false
         if game_state.combo_counter > game_state.combo_counter_prev and game_state.combo_counter > 0 then
             new_hit = true
-        elseif game_state.waza_total ~= game_state.waza_total_prev and game_state.waza_total > 0 then
-            new_hit = true
         end
 
         if new_hit and (engine.action_changed_since_match or (engine.next_expects_same_action and engine.new_input_since_match)) then
@@ -1232,26 +1230,28 @@ local function engine_active_update()
 
     -- Check if all steps completed
     if engine.combo_index > #seq then
-        -- Verify minimum combo count if specified
-        local min_combo = ex.success.min_combo or #seq
-        -- For multi-hit sequences with projectiles, combo counter might not match exactly
-        -- so we consider completion of all steps as success
-        engine.state = STATE_SUCCESS
-        engine.result_timer = SUCCESS_DISPLAY_FRAMES
-        engine.session_completions = engine.session_completions + 1
-        current_streak = current_streak + 1
-        if current_streak > best_streak then
-            best_streak = current_streak
-        end
-
-        -- Update progression
-        local prog = progression[ex.id]
-        if prog then
-            prog.completions = prog.completions + 1
-            if prog.completions >= MASTERY_THRESHOLD then
-                prog.mastered = true
+        local min_combo = ex.success.min_combo
+        if min_combo and game_state.combo_counter < min_combo then
+            -- Combo dropped before completing — don't count as success
+            engine.combo_index = #seq
+        else
+            engine.state = STATE_SUCCESS
+            engine.result_timer = SUCCESS_DISPLAY_FRAMES
+            engine.session_completions = engine.session_completions + 1
+            current_streak = current_streak + 1
+            if current_streak > best_streak then
+                best_streak = current_streak
             end
-            save_progression()
+
+            -- Update progression
+            local prog = progression[ex.id]
+            if prog then
+                prog.completions = prog.completions + 1
+                if prog.completions >= MASTERY_THRESHOLD then
+                    prog.mastered = true
+                end
+                save_progression()
+            end
         end
     end
 end
