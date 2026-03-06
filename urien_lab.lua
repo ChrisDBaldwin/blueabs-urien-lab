@@ -415,12 +415,33 @@ local MOVES = {
     ["st.LP_close"]= { action_ids = {"A00000000"}, type = "normal", sf = "LP",      numpad = "5LP" },
     ["st.LP_far"]  = { action_ids = {"A00010001"}, type = "normal", sf = "LP",      numpad = "5LP" },
     ["st.LP"]      = { action_ids = {"A00000000","A00010001"}, type = "normal", sf = "LP", numpad = "5LP" },
-    ["st.MP_close"]= { action_ids = {"A0000009e","A0001009e"}, type = "normal", sf = "MP", numpad = "5MP" },
-    ["st.MP_far"]  = { action_ids = {"A00030003"}, type = "normal", sf = "f+MP",   numpad = "6MP" },
     ["st.MP"]      = { action_ids = {"A0000009e","A0001009e","A00030003"}, type = "normal", sf = "MP", numpad = "5MP" },
+    ["f.MP"]       = { action_ids = {"A00050005"}, type = "normal", sf = "f+MP",    numpad = "6MP" },
+    ["st.HP"]      = { action_ids = {"A00060006"}, type = "normal", sf = "HP",      numpad = "5HP" },
+    ["f.HP"]       = { action_ids = {"A00080008","A0005009f"}, type = "normal", sf = "f+HP", numpad = "6HP" },
+    ["st.LK"]      = { action_ids = {"A00090009","A000a000a"}, type = "normal", sf = "LK", numpad = "5LK" },
+    ["st.MK"]      = { action_ids = {"A000c000c","A000d000d"}, type = "normal", sf = "MK", numpad = "5MK" },
+    ["st.HK"]      = { action_ids = {"A000f000f","A00100010"}, type = "normal", sf = "HK", numpad = "5HK" },
+    ["cr.LP"]      = { action_ids = {"A00120012"}, type = "normal", sf = "d+LP",    numpad = "2LP" },
+    ["cr.MP"]      = { action_ids = {"A00150015"}, type = "normal", sf = "d+MP",    numpad = "2MP" },
     ["cr.LK"]      = { action_ids = {"A001b001b"}, type = "normal", sf = "d+LK",    numpad = "2LK" },
+    ["cr.MK"]      = { action_ids = {"A001e001e"}, type = "normal", sf = "d+MK",    numpad = "2MK" },
+    ["cr.HK"]      = { action_ids = {"A00210021"}, type = "normal", sf = "d+HK",    numpad = "2HK" },
+    ["j.LP"]       = { action_ids = {"A00240024"}, type = "normal", sf = "j.LP",    numpad = "j.LP" },
+    ["j.MP"]       = { action_ids = {"A00260026"}, type = "normal", sf = "j.MP",    numpad = "j.MP" },
+    ["j.LK"]       = { action_ids = {"A002a002a"}, type = "normal", sf = "j.LK",    numpad = "j.LK" },
+    ["j.MK"]       = { action_ids = {"A002c002c"}, type = "normal", sf = "j.MK",    numpad = "j.MK" },
     ["j.HP"]       = { action_ids = {"A00400028","A00280028","A00340028"}, type = "normal", sf = "j.HP", numpad = "j.HP" },
     ["j.HK"]       = { action_ids = {"A0046002e","A002e002e","A003a002e"}, type = "normal", sf = "j.HK", numpad = "j.HK" },
+
+    -- Throws (T prefix)
+    ["Throw_F"]    = { action_ids = {"T00000000"}, type = "throw", sf = "f+LP+LK", numpad = "6LP+LK" },
+    ["Throw_N"]    = { action_ids = {"T00010001"}, type = "throw", sf = "LP+LK",   numpad = "5LP+LK" },
+    ["Throw_B"]    = { action_ids = {"T00020002"}, type = "throw", sf = "b+LP+LK", numpad = "4LP+LK" },
+    ["Throw_Whiff"]= { action_ids = {"A00900090"}, type = "throw", sf = "LP+LK",   numpad = "LP+LK" },
+
+    -- Universal Overhead
+    ["UOH"]        = { action_ids = {"S00310031"}, type = "normal", sf = "MP+MK",   numpad = "MP+MK" },
 
     -- Special moves (S prefix)
     ["L.Tackle"]   = { action_ids = {"S003a003a"}, type = "special", sf = "b~f+LK",    numpad = "[4]6LK" },
@@ -434,32 +455,47 @@ local MOVES = {
     ["L.Knee"]     = { action_ids = {"S00190019"}, type = "special", sf = "d~u+LK(air)", numpad = "[2]8LK(air)" },
     ["M.Knee"]     = { action_ids = {"S001a001a"}, type = "special", sf = "d~u+MK(air)", numpad = "[2]8MK(air)" },
     ["H.Knee"]     = { action_ids = {"S001b001b"}, type = "special", sf = "d~u+HK(air)", numpad = "[2]8HK(air)" },
+    ["EX.Knee"]    = { action_ids = {"S001c001c"}, type = "special", sf = "d~u+KK(air)", numpad = "[2]8KK(air)" },
     ["Taunt"]      = { action_ids = {"S00370037"}, type = "other",   sf = "Taunt",      numpad = "Taunt" },
 
-    -- Projectiles / supers (F prefix)
-    ["EX.Sphere"]  = { action_ids = {"F0084"},     type = "special", sf = "qcf+PP",     numpad = "236PP" },
-    ["L.Aegis"]    = { action_ids = {"F077b"},     type = "super",   sf = "qcf+LP (SA3)", numpad = "236LP(SA3)" },
-    ["M.Aegis"]    = { action_ids = {"F077c"},     type = "super",   sf = "qcf+MP (SA3)", numpad = "236MP(SA3)" },
-    ["Temporal"]   = { action_ids = {"F0068"},     type = "super",   sf = "qcf+P (SA2)",  numpad = "236P(SA2)" },
+    -- Metallic Sphere (S-prefix = character animation, F-prefix = projectile hit)
+    ["L.Sphere"]   = { action_ids = {"S00210021","F0053"}, type = "special", sf = "qcf+LP",  numpad = "236LP" },
+    ["M.Sphere"]   = { action_ids = {"S00220022"},         type = "special", sf = "qcf+MP",  numpad = "236MP" },
+    ["H.Sphere"]   = { action_ids = {"S00230023","F0055"}, type = "special", sf = "qcf+HP",  numpad = "236HP" },
+    ["EX.Sphere"]  = { action_ids = {"S00240024","F0084"},  type = "special", sf = "qcf+PP",  numpad = "236PP" },
 
-    -- Metallic Sphere character animations (throw motion, S-prefix)
-    ["L.Sphere_throw"] = { action_ids = {"S003e003e"}, type = "special", sf = "qcf+LP", numpad = "236LP" },
-    ["M.Sphere_throw"] = { action_ids = {"S003f003f"}, type = "special", sf = "qcf+MP", numpad = "236MP" },
-    ["H.Sphere_throw"] = { action_ids = {"S00400040"}, type = "special", sf = "qcf+HP", numpad = "236HP" },
+    -- Aegis Reflector SA3 (S-prefix = activation animation, F-prefix = reflector entity)
+    ["L.Aegis"]    = { action_ids = {"S003e003e","F077b"}, type = "super", sf = "qcf+LP (SA3)", numpad = "236LP(SA3)" },
+    ["M.Aegis"]    = { action_ids = {"S003f003f","F077c"}, type = "super", sf = "qcf+MP (SA3)", numpad = "236MP(SA3)" },
+    ["H.Aegis"]    = { action_ids = {"S00400040","F077d"}, type = "super", sf = "qcf+HP (SA3)", numpad = "236HP(SA3)" },
 
-    -- Metallic Sphere projectile hits (F-prefix)
-    ["L.Sphere"]   = { action_ids = {"F0053"},     type = "special", sf = "qcf+LP",    numpad = "236LP" },
-    ["H.Sphere"]   = { action_ids = {"F0055"},     type = "special", sf = "qcf+HP",    numpad = "236HP" },
-
-    -- Aegis Reflector (SA3) - H.Aegis completes the set
-    ["H.Aegis"]    = { action_ids = {"F077d"},     type = "super",   sf = "qcf+HP (SA3)", numpad = "236HP(SA3)" },
+    -- Temporal Thunder SA2
+    ["Temporal"]   = { action_ids = {"F0068"},             type = "super", sf = "qcf+P (SA2)",  numpad = "236P(SA2)" },
 
     -- Tyrant Slaughter (SA1) has multiple hit IDs
     ["Tyrant"]     = { action_ids = {"S00460046","S00470047","S00480048"}, type = "super", sf = "qcf+K (SA1)", numpad = "236K(SA1)" },
 
-    -- Unidentified specials (rename once identified)
-    ["Unk_0021"]   = { action_ids = {"S00210021"}, type = "special", sf = "Unk_0021",  numpad = "Unk_0021" },
-    ["Unk_0023"]   = { action_ids = {"S00230023"}, type = "special", sf = "Unk_0023",  numpad = "Unk_0023" },
+    -- Neutral motions (N/M prefix)
+    ["Idle"]       = { action_ids = {"N00000000"}, type = "neutral", sf = "Idle",    numpad = "Idle" },
+    ["Walk_F"]     = { action_ids = {"N00020002"}, type = "neutral", sf = "f",       numpad = "6" },
+    ["Walk_B"]     = { action_ids = {"N00030003"}, type = "neutral", sf = "b",       numpad = "4" },
+    ["Dash"]       = { action_ids = {"N00040004"}, type = "neutral", sf = "f,f",     numpad = "66" },
+    ["Backdash"]   = { action_ids = {"N00050005"}, type = "neutral", sf = "b,b",     numpad = "44" },
+    ["Crouch"]     = { action_ids = {"N00060006","N00070007"}, type = "neutral", sf = "d",  numpad = "2" },
+    ["Jump_Start"] = { action_ids = {"M000c000c"}, type = "neutral", sf = "jump",    numpad = "jump" },
+    ["Jump_N"]     = { action_ids = {"N000f000f"}, type = "neutral", sf = "u",       numpad = "8" },
+    ["Jump_B"]     = { action_ids = {"N00100010"}, type = "neutral", sf = "ub",      numpad = "7" },
+    ["Jump_F"]     = { action_ids = {"N000e000e"}, type = "neutral", sf = "uf",      numpad = "9" },
+    ["SJ_N"]       = { action_ids = {"N00150014"}, type = "neutral", sf = "su",      numpad = "s8" },
+    ["SJ_B"]       = { action_ids = {"N00160014"}, type = "neutral", sf = "sub",     numpad = "s7" },
+    ["SJ_F"]       = { action_ids = {"N00140014"}, type = "neutral", sf = "suf",     numpad = "s9" },
+
+    -- Guard / Parry
+    ["Block_St"]   = { action_ids = {"G00010001"}, type = "guard", sf = "block",    numpad = "block" },
+    ["Block_Cr"]   = { action_ids = {"G00020002"}, type = "guard", sf = "d+block",  numpad = "1block" },
+    ["Parry_St"]   = { action_ids = {"G00190019"}, type = "guard", sf = "parry",    numpad = "parry" },
+    ["Parry_Cr"]   = { action_ids = {"N001a001a"}, type = "guard", sf = "d+parry",  numpad = "2parry" },
+    ["Parry_Air"]  = { action_ids = {"N001b001b"}, type = "guard", sf = "air parry", numpad = "air parry" },
 }
 
 -- ============================================================================
@@ -1010,11 +1046,11 @@ local function scan_projectile_hits(expected_ids)
 end
 
 -- Sphere_throw and Aegis Reflector share the same P1 activation animation.
--- When meter was consumed, remap Sphere_throw action_id → Aegis action_id.
+-- Remap Aegis activation animation (S-prefix) to reflector entity (F-prefix)
 local SPHERE_TO_AEGIS = {
-    ["S003e003e"] = "F077b",  -- L.Sphere_throw → L.Aegis
-    ["S003f003f"] = "F077c",  -- M.Sphere_throw → M.Aegis
-    ["S00400040"] = "F077d",  -- H.Sphere_throw → H.Aegis
+    ["S003e003e"] = "F077b",  -- L.Aegis activation → L.Aegis reflector
+    ["S003f003f"] = "F077c",  -- M.Aegis activation → M.Aegis reflector
+    ["S00400040"] = "F077d",  -- H.Aegis activation → H.Aegis reflector
 }
 
 local function select_exercise(index)
@@ -2494,7 +2530,8 @@ local function draw_debug()
     local gs = game_state
     local y = 34
     draw_text(4, y,      "Phase: " .. gs.phase, COLOR.text_gray)
-    draw_text(4, y + 8,  "P1 Action: " .. gs.p1.action_string, COLOR.text_gray)
+    local move_label = lookup_move_name(gs.p1.action_string) or "???"
+    draw_text(4, y + 8,  "P1 Action: " .. gs.p1.action_string .. " [" .. move_label .. "]", COLOR.text_gray)
     draw_text(4, y + 16, "Combo: " .. gs.combo_counter, COLOR.text_gray)
     draw_text(4, y + 24, "Waza: " .. gs.waza_total, COLOR.text_gray)
     draw_text(4, y + 32, "Engine: " .. engine.state, COLOR.text_gray)
