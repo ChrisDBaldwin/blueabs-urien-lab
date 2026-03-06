@@ -2100,7 +2100,7 @@ local function draw_category_selector()
     local num_cats = #EXERCISE_CATEGORIES
     local row_h = 10
     local popup_w = 100
-    local popup_h = 14 + num_cats * row_h + 12  -- title + rows + footer
+    local popup_h = 14 + num_cats * row_h + 32  -- title + rows + footer
     local popup_x = (SCREEN_W - popup_w) / 2
     local popup_y = (SCREEN_H - popup_h) / 2
 
@@ -2117,7 +2117,9 @@ local function draw_category_selector()
         end
     end
 
-    draw_text(popup_x + 4, popup_y + popup_h - 10, "Jab: Confirm", COLOR.text_gray)
+    draw_text(popup_x + 4, popup_y + popup_h - 30, "LP: Confirm", COLOR.text_gray)
+    draw_text(popup_x + 4, popup_y + popup_h - 20, "LK: Cancel", COLOR.text_gray)
+    draw_text(popup_x + 4, popup_y + popup_h - 10, "MK: Retry", COLOR.text_gray)
 end
 
 --- Draw success/fail banner
@@ -3467,14 +3469,27 @@ local function handle_category_selector_input()
         cat_sel.active = false
         cat_sel.exercise = nil
         rebuild_filtered_exercises()
-    elseif is_pressed("P1 Start") or is_pressed("P1 Coin") then
-        -- Cancel: keep default "combo", save and close
-        save_exercises()
-        save_progression()
-        capture_result = "EXERCISE CREATED: " .. cat_sel.exercise.name
-        capture_result_timer = 180
+    elseif is_pressed("P1 Weak Kick") or is_pressed("P1 Start") or is_pressed("P1 Coin") then
+        -- Cancel: discard the captured exercise
+        local idx = nil
+        for i, ex in ipairs(exercises) do
+            if ex == cat_sel.exercise then idx = i; break end
+        end
+        if idx then table.remove(exercises, idx) end
         cat_sel.active = false
         cat_sel.exercise = nil
+        rebuild_filtered_exercises()
+    elseif is_pressed("P1 Medium Kick") then
+        -- Retry: discard the captured exercise and start recording again
+        local idx = nil
+        for i, ex in ipairs(exercises) do
+            if ex == cat_sel.exercise then idx = i; break end
+        end
+        if idx then table.remove(exercises, idx) end
+        cat_sel.active = false
+        cat_sel.exercise = nil
+        rebuild_filtered_exercises()
+        capture_start()
     end
 end
 
