@@ -54,5 +54,16 @@ SUCCESS:2
 TIMING:0,13
 HINT:be close to the opponent
 ---
-
-
+---
+ID:c_13
+NAME: Tackle Headbutt
+NOTATION_SF:d+HP, b~f+MK, d~u+MP
+NOTATION_NP:2HP, [4]6MK, [2]8MP
+DIFFICULTY:2
+CATEGORY:combo
+SETUP:70DC,FFFFA0D5,A0,A0,full,1,1,stand,1
+SEQ:cr.HP,H,A00180018|M.Tackle,H,S003b003b|M.Headbutt,H,S002a002a
+SUCCESS:3
+TIMING:0,55,45
+HINT: down-back > up-back > down-back during launcher partitions charge for headbutt after tackle
+---
