@@ -292,6 +292,9 @@ local MEM = {
     p2_flip         = 0x020691CD,  -- byte (0=facing right, 1=facing left)
     p2_action_type  = 0x0206930B,  -- byte
 
+    -- Game freeze (write 0xFF to pause game logic, 0x00 to resume)
+    game_freeze     = 0x0201136F,
+
     -- Round timer
     round_timer     = 0x02011377,  -- byte (write 100 each frame to keep at 99)
 
@@ -332,12 +335,6 @@ local MEM = {
 
     -- Character select
     p1_char_id      = 0x02011387,  -- byte (Urien = 14)
-
-    -- P1 input buffer (game RAM, written by engine each frame)
-    p1_input_btn    = 0x0202564B,  -- byte: bits 0-3=UDLR, 4-6=LP/MP/HP
-    p1_input_kick   = 0x0202564A,  -- byte: bits 0-2=LK/MK/HK
-    p1_input_btn2   = 0x0202568F,  -- byte: alternate input buffer (same layout)
-    p1_input_kick2  = 0x0202568E,  -- byte: alternate kick buffer
 
     -- Character select screen (game's native menu)
     char_select_timer = 0x020154FB,  -- byte: freeze to prevent timeout
@@ -405,6 +402,9 @@ local konami = {
 
 -- Temp slot used for all save/load operations (file gets renamed to descriptive name)
 local TEMP_SLOT = 99999
+
+-- Set after savestate loads to keep game frozen until buttons released
+local pending_input_freeze = false
 
 --- Get the named save file path for a character
 local function char_save_path(char)
@@ -1648,6 +1648,10 @@ local function load_char_state(char_index)
     local state = savestate.create(TEMP_SLOT)
     savestate.load(state)
     os.rename(temp, path)
+    -- Keep game frozen so the button that triggered the load doesn't
+    -- pass through (savestate restore clears the freeze flag)
+    memory.writebyte(MEM.game_freeze, 0xFF)
+    pending_input_freeze = true
     -- Immediately freeze round timer so it doesn't tick after loading
     memory.writebyte(MEM.round_timer, 100)
     -- Fill meter immediately on next on_gui frame
@@ -3811,12 +3815,6 @@ local function on_frame()
         -- If we just transitioned to training, skip this frame so Start
         -- doesn't also toggle the exercise menu
         if app_state ~= APP_CHARSELECT then return end
-        if game_state.playing then
-            -- Freeze game inputs while the charselect overlay is visible
-            if charselect_visible then
-                freeze_game()
-            end
-        end
         if charselect_visible then return end
     end
 
@@ -3858,14 +3856,32 @@ local function on_gui()
     end
 
     if game_state.playing then
-        -- Suppress P1 inputs at the game RAM level during menu/popup states.
-        -- Writing zeros here (on_gui, after game logic) clears the input buffer
-        -- so the game sees no held buttons and no new-press edges next frame.
-        if menu.show or cat_sel.active then
-            memory.writebyte(MEM.p1_input_btn, 0x00)
-            memory.writebyte(MEM.p1_input_kick, 0x00)
-            memory.writebyte(MEM.p1_input_btn2, 0x00)
-            memory.writebyte(MEM.p1_input_kick2, 0x00)
+        -- Freeze/unfreeze game logic during menu/popup states.
+        -- After menu closes, stay frozen until all buttons are released
+        -- so the closing press doesn't pass through to the game.
+        local menu_active = menu.show or cat_sel.active
+        if menu_active or pending_input_freeze then
+            menu.was_frozen = true
+        end
+        if menu.was_frozen and not menu_active then
+            -- Check if any buttons are still held
+            local any_held = false
+            for _, btn in ipairs({
+                "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
+                "P1 Weak Kick", "P1 Medium Kick", "P1 Strong Kick",
+                "P1 Start", "P1 Up", "P1 Down", "P1 Left", "P1 Right",
+            }) do
+                if input_current[btn] then any_held = true; break end
+            end
+            if not any_held then
+                menu.was_frozen = false
+                pending_input_freeze = false
+            end
+        end
+        if menu_active or menu.was_frozen then
+            memory.writebyte(MEM.game_freeze, 0xFF)
+        else
+            memory.writebyte(MEM.game_freeze, 0x00)
         end
 
         -- Freeze round timer (infinite time)
@@ -3920,6 +3936,10 @@ local function on_gui()
     end
 
     if app_state == APP_CHARSELECT then
+        -- Freeze game logic while charselect overlay is visible
+        if charselect_visible and game_state.playing then
+            memory.writebyte(MEM.game_freeze, 0xFF)
+        end
         if charselect_visible then
             draw_charselect()
         else
