@@ -34,7 +34,7 @@ Organized into numbered sections:
 | [6] Utility Functions | Memory reads (little-endian), action string builders, action ID normalization |
 | [7] Game State Reader | Per-frame polling of positions, actions, combo counter, hit region, meter |
 | [8] Dummy Controller | P2 position/life/meter/stun management, input locking, delayed HP recovery |
-| [9] Exercise Engine | State machine: SETUP → ACTIVE → SUCCESS/FAIL, combo detection, timeout |
+| [9] Exercise Engine | State machine: SETUP → ACTIVE → SUCCESS/FAIL, combo detection |
 | [10] Input Display | Toggleable SF/Numpad notation |
 | [11a] Matchup Save States | Legacy 5-slot save state system (slots 8001–8005) |
 | [11a2] Character Save States | Named save files (`vs_CharName.fs`), metadata in `urien_lab_characters.txt`, auto-load on startup |
@@ -91,7 +91,6 @@ Action strings are built by `build_action_string()` as `prefix + sub(4hex) + id(
             meter = "full", fill_h_charge = true, fill_v_charge = false,
             p2_state = "stand", corner = false },
   success = { min_combo = 2 },
-  fail = { timeout_frames = 600 },
   ref_timing = { 12, 8 },
   hints = { "Hold down-back, press d+HP, then tap f+LK during the cancel window" },
   difficulty = 2,
@@ -113,7 +112,6 @@ CHARS:Ken,Yun
 SETUP:0100,0180,A0,A0,full,1,0,stand,0
 SEQ:cr.HP,H,A00180018|L.Tackle,H,S003a003a
 SUCCESS:2
-TIMEOUT:900
 RESETOK:1
 TIMING:12,8
 HINT:d+HP -> b~f+LK

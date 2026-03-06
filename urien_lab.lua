@@ -333,6 +333,12 @@ local MEM = {
     -- Character select
     p1_char_id      = 0x02011387,  -- byte (Urien = 14)
 
+    -- P1 input buffer (game RAM, written by engine each frame)
+    p1_input_btn    = 0x0202564B,  -- byte: bits 0-3=UDLR, 4-6=LP/MP/HP
+    p1_input_kick   = 0x0202564A,  -- byte: bits 0-2=LK/MK/HK
+    p1_input_btn2   = 0x0202568F,  -- byte: alternate input buffer (same layout)
+    p1_input_kick2  = 0x0202568E,  -- byte: alternate kick buffer
+
     -- Character select screen (game's native menu)
     char_select_timer = 0x020154FB,  -- byte: freeze to prevent timeout
     p1_locked         = 0x020154C6,  -- byte: 0xFF = character locked in
@@ -979,7 +985,7 @@ local engine = {
 
     -- Fail diagnostics
     fail_step_index = 0,       -- which step failed
-    fail_type = "",            -- "drop" | "timeout"
+    fail_type = "",            -- "drop"
     fail_gap = 0,              -- actual frame gap at failure point
     fail_ref_gap = 0,          -- reference gap (0 if unknown)
     fail_last_action = "",     -- what move player was in at fail
@@ -1136,19 +1142,6 @@ local function engine_active_update()
     -- Manage HP/stun/meter/charge with delayed recovery
     manage_resources(ex)
 
-    -- Timeout check: fail if exercise has been active too long
-    local timeout = (ex.fail and ex.fail.timeout_frames) or 900
-    if game_state.frame_count - engine.active_start_frame > timeout then
-        engine.state = STATE_FAIL
-        engine.result_timer = FAIL_DISPLAY_FRAMES
-        engine.fail_step_index = engine.combo_index
-        engine.fail_type = "timeout"
-        engine.fail_gap = 0
-        engine.fail_ref_gap = 0
-        engine.fail_last_action = ""
-        engine.fail_reason = "Timeout"
-        return
-    end
 
     -- Current step we're looking for
     if engine.combo_index > #seq then
@@ -2231,12 +2224,12 @@ local function draw_result_banner()
 
         local line_y = banner_y + 4
 
-        -- Line 1: DROPPED/TIMEOUT at step N: [move_name]
+        -- Line 1: DROPPED at step N: [move_name]
         local step_name = ""
         if ex and ex.sequence and engine.fail_step_index > 0 and engine.fail_step_index <= #ex.sequence then
             step_name = ex.sequence[engine.fail_step_index].name
         end
-        local fail_label = engine.fail_type == "timeout" and "TIMEOUT" or "DROPPED"
+        local fail_label = "DROPPED"
         local drop_msg = string.format("%s at step %d: %s", fail_label, engine.fail_step_index, step_name)
         draw_text(bx + 4, line_y, drop_msg, COLOR.text_red)
         line_y = line_y + 10
@@ -3210,10 +3203,6 @@ local function write_exercise(f, exercise)
     f:write("SEQ:" .. table.concat(seq_parts, "|") .. "\n")
 
     f:write("SUCCESS:" .. (exercise.success.min_combo or #exercise.sequence) .. "\n")
-    -- Timeout (if set)
-    if exercise.fail and exercise.fail.timeout_frames then
-        f:write("TIMEOUT:" .. exercise.fail.timeout_frames .. "\n")
-    end
     -- Multi-combo reset flag (Aegis setups)
     if exercise.allow_combo_reset then
         f:write("RESETOK:1\n")
@@ -3343,8 +3332,6 @@ local function load_exercises_from_file(path, shipped_flag)
                     end
                 elseif key == "SUCCESS" then
                     current.success = { min_combo = tonumber(value) or 1 }
-                elseif key == "TIMEOUT" then
-                    current.fail = { timeout_frames = tonumber(value) or 600 }
                 elseif key == "RESETOK" then
                     current.allow_combo_reset = (value == "1")
                 elseif key == "TIMING" then
@@ -3871,6 +3858,16 @@ local function on_gui()
     end
 
     if game_state.playing then
+        -- Suppress P1 inputs at the game RAM level during menu/popup states.
+        -- Writing zeros here (on_gui, after game logic) clears the input buffer
+        -- so the game sees no held buttons and no new-press edges next frame.
+        if menu.show or cat_sel.active then
+            memory.writebyte(MEM.p1_input_btn, 0x00)
+            memory.writebyte(MEM.p1_input_kick, 0x00)
+            memory.writebyte(MEM.p1_input_btn2, 0x00)
+            memory.writebyte(MEM.p1_input_kick2, 0x00)
+        end
+
         -- Freeze round timer (infinite time)
         memory.writebyte(MEM.round_timer, 100)
 
