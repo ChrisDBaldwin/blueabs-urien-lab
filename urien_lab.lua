@@ -34,8 +34,7 @@
 -- [1] CONSTANTS & CONFIG
 -- ============================================================================
 
-local SCRIPT_VERSION = "0.6.0"
-local EXERCISES_VERSION = 1
+local SCRIPT_VERSION = "0.6.2"
 local SAVE_FILE = "urien_lab_save.txt"
 local CAPTURE_FILE = "captured_exercises.txt"
 local MATCHUP_FILE = "urien_lab_matchups.txt"
@@ -78,8 +77,7 @@ local EXERCISE_FILE = "urien_lab_exercises.txt"
 local CUSTOM_EXERCISE_FILE = "urien_lab_custom.txt"
 local exercise_counter = 0
 
--- Update & distribution URLs
-local GITHUB_RAW_URL  = "https://raw.githubusercontent.com/ChrisDBaldwin/blueabs-urien-lab/main/"
+-- Save state distribution
 local SAVES_BASE_URL  = "https://voidtalker.com/urien-lab/"
 local MANIFEST_URL    = SAVES_BASE_URL .. "manifest.txt"
 
@@ -167,89 +165,71 @@ local function detect_platform()
     return "unix"
 end
 
+--- Run a shell command silently (no visible cmd window on Windows).
+local function silent_execute(cmd)
+    if detect_platform() == "windows" then
+        -- io.popen avoids the visible console window that os.execute creates
+        local p = io.popen(cmd .. " 2>nul", "r")
+        if not p then return false end
+        p:read("*a")
+        p:close()
+        return true  -- can't reliably get exit code in Lua 5.1; callers verify results
+    else
+        local result = os.execute(cmd .. " 2>/dev/null")
+        return result == 0 or result == true
+    end
+end
+
 --- Download a file from url to dest. Returns true on success.
 local function download_file(url, dest)
-    local platform = detect_platform()
-    local null_redirect = platform == "windows" and " 2>nul" or " 2>/dev/null"
     -- Primary: curl
-    local cmd = 'curl -sfL --connect-timeout 2 --max-time 10 -o "' .. dest .. '" "' .. url .. '"' .. null_redirect
-    local result = os.execute(cmd)
-    -- os.execute returns 0 (Lua 5.1) or true (Lua 5.2+) on success
-    if result == 0 or result == true then return true end
+    local cmd = 'curl -sfL --connect-timeout 2 --max-time 10 -o "' .. dest .. '" "' .. url .. '"'
+    silent_execute(cmd)
+    -- Check if file was actually written (curl -f won't create file on HTTP error)
+    local f = io.open(dest, "r")
+    if f then
+        local size = f:seek("end")
+        f:close()
+        if size and size > 0 then return true end
+    end
     -- Windows fallback: PowerShell
-    if platform == "windows" then
-        cmd = 'powershell -NoProfile -Command "(New-Object Net.WebClient).DownloadFile(\'' .. url .. '\',\'' .. dest .. '\')"' .. null_redirect
-        result = os.execute(cmd)
-        if result == 0 or result == true then return true end
+    if detect_platform() == "windows" then
+        cmd = 'powershell -NoProfile -Command "(New-Object Net.WebClient).DownloadFile(\'' .. url .. '\',\'' .. dest .. '\')"'
+        silent_execute(cmd)
+        f = io.open(dest, "r")
+        if f then
+            local size = f:seek("end")
+            f:close()
+            if size and size > 0 then return true end
+        end
     end
     return false
 end
 
---- Parse "X.Y.Z" version string into a comparable number (major*10000 + minor*100 + patch)
-local function parse_version(str)
-    if not str then return 0 end
-    local major, minor, patch = str:match("^(%d+)%.(%d+)%.(%d+)")
-    if not major then return 0 end
-    return tonumber(major) * 10000 + tonumber(minor) * 100 + tonumber(patch)
-end
-
---- Module-level manifest data (populated by sync_from_manifest)
+--- Module-level manifest data (populated by fetch_available_saves)
 local manifest_saves = nil
 
---- Fetch manifest.txt from voidtalker. Returns parsed table or nil on failure.
-local function fetch_manifest()
+--- Fetch manifest.txt from voidtalker and store available save state list.
+local function fetch_available_saves()
     local tmp = "manifest.txt.tmp"
     if not download_file(MANIFEST_URL, tmp) then
         os.remove(tmp)
-        return nil
+        return
     end
     local f = io.open(tmp, "r")
-    if not f then os.remove(tmp) return nil end
-    local result = { saves = {} }
+    if not f then os.remove(tmp) return end
+    local saves = {}
     for line in f:lines() do
         local key, val = line:match("^(%S+):(.+)$")
-        if key == "SCRIPT_VERSION" then
-            result.script_version = val
-        elseif key == "EXERCISES_VERSION" then
-            result.exercises_version = tonumber(val)
-        elseif key == "SAVE" then
-            result.saves[#result.saves + 1] = val
+        if key == "SAVE" then
+            saves[#saves + 1] = val
         end
     end
     f:close()
     os.remove(tmp)
-    return result
-end
-
---- Sync script, exercises, and save state list from manifest. Called once at boot.
-local function sync_from_manifest()
-    local manifest = fetch_manifest()
-    if not manifest then return end
-    -- Script update
-    if manifest.script_version then
-        local remote_num = parse_version(manifest.script_version)
-        local local_num = parse_version(SCRIPT_VERSION)
-        if remote_num > local_num then
-            local tmp_file = "urien_lab.lua.tmp"
-            if download_file(GITHUB_RAW_URL .. "urien_lab.lua", tmp_file) then
-                os.remove("urien_lab.lua")
-                os.rename(tmp_file, "urien_lab.lua")
-                print("[Urien Lab] Updated to v" .. manifest.script_version .. " -- reload script to apply")
-            else
-                os.remove(tmp_file)
-            end
-        end
-    end
-    -- Exercise update (decoupled from script updates)
-    if manifest.exercises_version and manifest.exercises_version > EXERCISES_VERSION then
-        if download_file(GITHUB_RAW_URL .. "urien_lab_exercises.txt", EXERCISE_FILE) then
-            print("[Urien Lab] Updated exercises to v" .. manifest.exercises_version)
-        end
-    end
-    -- Store available saves for on-demand download
-    if #manifest.saves > 0 then
+    if #saves > 0 then
         manifest_saves = {}
-        for _, name in ipairs(manifest.saves) do
+        for _, name in ipairs(saves) do
             manifest_saves[name] = true
         end
     end
@@ -1536,11 +1516,8 @@ end
 --- Load the character select save state
 local function load_charselect_save()
     if not file_exists(CHARSELECT_SAVE) then
-        -- Try downloading from server
-        if not fetch_save_state(CHARSELECT_SAVE) then
-            print("[Urien Lab] No character select save found: " .. CHARSELECT_SAVE)
-            return false
-        end
+        print("[Urien Lab] No character select save found: " .. CHARSELECT_SAVE)
+        return false
     end
     local temp = tostring(TEMP_SLOT)
     os.remove(temp)
@@ -3797,7 +3774,7 @@ local function on_frame()
     -- Auto-load first available save state on startup
     if pending_home_load then
         pending_home_load = false
-        if file_exists(CHARSELECT_SAVE) or fetch_save_state(CHARSELECT_SAVE) then
+        if file_exists(CHARSELECT_SAVE) then
             start_character_select()
         else
             load_home_state()
@@ -4006,8 +3983,8 @@ end
 -- [13] HOOK REGISTRATION
 -- ============================================================================
 
--- Sync content from manifest (script updates, exercises, save state list)
-sync_from_manifest()
+-- Fetch available save states from manifest (for on-demand download)
+fetch_available_saves()
 
 -- Load exercises FIRST (before progression, so init_progression sees exercise IDs)
 load_exercises()
@@ -4081,7 +4058,7 @@ end)
 -- Startup message
 print("===========================================")
 print("  BLUEABS URIEN LAB v" .. SCRIPT_VERSION)
-print("  Training Mode for SF3:3rd Strike")
+print("  Training & Tutorial Mode for Urien")
 print("===========================================")
 print("  CHARACTER SELECT:")
 print("    D-Pad     = Navigate characters")
