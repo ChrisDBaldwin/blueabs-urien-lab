@@ -383,9 +383,6 @@ local konami = {
 -- Temp slot used for all save/load operations (file gets renamed to descriptive name)
 local TEMP_SLOT = 99999
 
--- Set after savestate loads to keep game frozen until buttons released
-local pending_input_freeze = false
-
 --- Get the named save file path for a character
 local function char_save_path(char)
     return "vs_" .. char.name .. ".fs"
@@ -1625,10 +1622,9 @@ local function load_char_state(char_index)
     local state = savestate.create(TEMP_SLOT)
     savestate.load(state)
     os.rename(temp, path)
-    -- Keep game frozen so the button that triggered the load doesn't
-    -- pass through (savestate restore clears the freeze flag)
+    -- Savestate restore clears the freeze flag; re-freeze so game logic
+    -- doesn't run for one frame before on_gui can set it again
     memory.writebyte(MEM.game_freeze, 0xFF)
-    pending_input_freeze = true
     -- Immediately freeze round timer so it doesn't tick after loading
     memory.writebyte(MEM.round_timer, 100)
     -- Fill meter immediately on next on_gui frame
@@ -2637,15 +2633,27 @@ local function capture_frame_update()
     -- Record this frame's joypad state for input notation detection
     capture.input_log[frame_num] = joypad.get() or {}
 
-    -- Detect normal/special hits
+    -- Detect normal/special hits (combo_counter only — waza_total fires on whiffs too)
     local new_hit = false
     if gs.combo_counter > gs.combo_counter_prev and gs.combo_counter > 0 then
-        new_hit = true
-    elseif gs.waza_total ~= gs.waza_total_prev and gs.waza_total > 0 then
         new_hit = true
     end
 
     if new_hit then
+        -- On first hit, re-snapshot setup so exercise reflects combo start position
+        if capture.hit_count == 0 then
+            capture.start_frame = gs.frame_count
+            capture.start_p1_x = gs.p1.x_pos
+            capture.start_p2_x = gs.p2.x_pos
+            capture.setup_snapshot = {
+                p1_x = gs.p1.x_pos, p2_x = gs.p2.x_pos,
+                p1_flip = gs.p1.flip,
+                meter_bars = gs.meter_bars, meter_gauge = gs.meter_gauge,
+                corner = is_near_corner(gs.p2.x_pos),
+            }
+            -- Re-base frame number for this hit
+            frame_num = 0
+        end
         local action_id = gs.p1.action_string
         local hit_type = "H"
         -- Aegis activation shares action_id with Sphere_throw; remap when meter was consumed
@@ -3792,6 +3800,11 @@ local function on_frame()
         -- If we just transitioned to training, skip this frame so Start
         -- doesn't also toggle the exercise menu
         if app_state ~= APP_CHARSELECT then return end
+        if game_state.playing then
+            if charselect_visible then
+                freeze_game()
+            end
+        end
         if charselect_visible then return end
     end
 
@@ -3837,11 +3850,10 @@ local function on_gui()
         -- After menu closes, stay frozen until all buttons are released
         -- so the closing press doesn't pass through to the game.
         local menu_active = menu.show or cat_sel.active
-        if menu_active or pending_input_freeze then
+        if menu_active then
             menu.was_frozen = true
         end
         if menu.was_frozen and not menu_active then
-            -- Check if any buttons are still held
             local any_held = false
             for _, btn in ipairs({
                 "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
@@ -3852,7 +3864,6 @@ local function on_gui()
             end
             if not any_held then
                 menu.was_frozen = false
-                pending_input_freeze = false
             end
         end
         if menu_active or menu.was_frozen then
@@ -3913,7 +3924,6 @@ local function on_gui()
     end
 
     if app_state == APP_CHARSELECT then
-        -- Freeze game logic while charselect overlay is visible
         if charselect_visible and game_state.playing then
             memory.writebyte(MEM.game_freeze, 0xFF)
         end
