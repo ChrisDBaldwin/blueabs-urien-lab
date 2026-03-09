@@ -57,6 +57,11 @@ local METER_REFILL_DELAY_FRAMES = 90 -- Frames of no input before meter starts f
 
 -- Mastery
 local MASTERY_THRESHOLD = 3          -- Completions needed to master an exercise
+local TUTORIAL_MASTERY_THRESHOLD = 1 -- Tutorial lessons only need 1 completion
+
+local function get_mastery_threshold(ex)
+    return ex and ex.tutorial_type and TUTORIAL_MASTERY_THRESHOLD or MASTERY_THRESHOLD
+end
 
 -- Matchup save state slots
 local MAX_MATCHUP_SLOTS = 5
@@ -75,6 +80,7 @@ local CHARSELECT_SAVE = "character_select.fs"
 -- Exercises (record-to-exercise)
 local EXERCISE_FILE = "urien_lab_exercises.txt"
 local CUSTOM_EXERCISE_FILE = "urien_lab_custom.txt"
+local TUTORIAL_FILE = "urien_lab_tutorial.txt"
 local exercise_counter = 0
 
 -- Save state distribution
@@ -491,220 +497,11 @@ local exercises = {}
 -- ============================================================================
 -- [4b] TUTORIAL DATA
 -- ============================================================================
--- Tutorial content is product content — lives in the script, not in exercise files.
+-- Tutorial content loaded from urien_lab_tutorial.txt at startup.
 -- Each chapter has lessons that are playable exercises using the existing engine,
 -- extended with tutorial_type for block/action detection.
 
-local TUTORIAL_CHAPTERS = {
-    {
-        name = "Normals",
-        opponent = "Urien",
-        description = "Every combo starts with a button.",
-        lessons = {
-            { id = "tut_1_01", name = "Standing Strong",
-              tutorial_type = "hit",
-              sequence = { { name = "st.MP", hit_type = "H", action_ids = {"A0000009e","A0001009e","A00030003"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = { min_combo = 1 },
-              description = "Your bread and butter. Fast, reaches far, cancels into everything.",
-              hints = { "Press Medium Punch while standing." },
-              difficulty = 1 },
-            { id = "tut_1_02", name = "Crouching Fierce",
-              tutorial_type = "hit",
-              sequence = { { name = "cr.HP", hit_type = "H", action_ids = {"A00180018"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = { min_combo = 1 },
-              description = "The launcher that starts real damage.",
-              hints = { "Hold down, press Strong Punch." },
-              difficulty = 1 },
-            { id = "tut_1_03", name = "Crouching Forward",
-              tutorial_type = "hit",
-              sequence = { { name = "cr.MK", hit_type = "H", action_ids = {"A001e001e"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = { min_combo = 1 },
-              description = "Footsie tool. Controls ground space.",
-              hints = { "Hold down, press Medium Kick." },
-              difficulty = 1 },
-            { id = "tut_1_04", name = "Jumping Roundhouse",
-              tutorial_type = "hit",
-              sequence = { { name = "j.HK", hit_type = "H", action_ids = {"A0046002e","A002e002e","A003a002e"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = { min_combo = 1 },
-              description = "Jump-in attack. High priority, great range.",
-              hints = { "Jump forward, press Strong Kick at the peak." },
-              difficulty = 1 },
-        }
-    },
-    {
-        name = "Blocking",
-        opponent = "Urien",
-        description = "That metallic clang is the best block sound in fighting games.",
-        lessons = {
-            { id = "tut_2_01", name = "Block a Punch",
-              tutorial_type = "block",
-              block_match = "G",
-              dummy_attack = { button = "P2 Strong Punch", delay = 40, repeat_interval = 90 },
-              sequence = { { name = "Block", hit_type = "H", action_ids = {"G00010001"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Hold back. Hear that metallic clang. Appreciate it.",
-              hints = { "Hold back (away from opponent) before the attack connects." },
-              difficulty = 1 },
-            { id = "tut_2_02", name = "Block a Low",
-              tutorial_type = "block",
-              block_match = "G00020002",
-              dummy_attack = { button = "P2 Medium Kick", delay = 40, repeat_interval = 90, crouch = true },
-              sequence = { { name = "Crouch Block", hit_type = "H", action_ids = {"G00020002"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Low attacks must be blocked crouching. Down-back is your friend.",
-              hints = { "Hold down-back to crouch block." },
-              difficulty = 1 },
-            { id = "tut_2_03", name = "Block then Punish",
-              tutorial_type = "block_punish",
-              block_match = "G",
-              punish_action_ids = {"A001e001e"},
-              dummy_attack = { button = "P2 Strong Punch", delay = 40, repeat_interval = 120 },
-              sequence = { { name = "Block > cr.MK", hit_type = "H", action_ids = {"A001e001e"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = { min_combo = 1 },
-              description = "That clang means it's your turn. Make them pay.",
-              hints = { "Block the attack, then immediately press d+MK to punish." },
-              difficulty = 2 },
-        }
-    },
-    {
-        name = "Special Moves",
-        opponent = "Urien",
-        description = "Urien is a charge character. Hold a direction, release the opposite.",
-        lessons = {
-            { id = "tut_3_01", name = "Chariot Tackle",
-              tutorial_type = "action",
-              sequence = { { name = "L.Tackle", hit_type = "H", action_ids = {"S003a003a"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Hold back, then forward + kick. Feel the charge.",
-              hints = { "Hold back for ~1 second, then press forward + Light Kick together." },
-              difficulty = 2 },
-            { id = "tut_3_02", name = "Headbutt",
-              tutorial_type = "action",
-              sequence = { { name = "L.Headbutt", hit_type = "H", action_ids = {"S00290029"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Vertical charge: hold down, then up + punch.",
-              hints = { "Hold down for ~1 second, then press up + Light Punch together." },
-              difficulty = 2 },
-            { id = "tut_3_03", name = "Metallic Sphere",
-              tutorial_type = "action",
-              sequence = { { name = "L.Sphere", hit_type = "H", action_ids = {"S00210021"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Quarter-circle forward + punch. Urien's fireball.",
-              hints = { "Roll the stick from down to forward, press Light Punch." },
-              difficulty = 2 },
-            { id = "tut_3_04", name = "Knee Drop",
-              tutorial_type = "action",
-              sequence = { { name = "L.Knee Drop", hit_type = "H", action_ids = {"S00190019"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Air charge move. Jump, hold down, then up + kick.",
-              hints = { "Jump, quickly hold down, then press up + Light Kick." },
-              difficulty = 3 },
-        }
-    },
-    {
-        name = "EX Moves",
-        opponent = "Urien",
-        description = "Two buttons. More meter. More damage.",
-        lessons = {
-            { id = "tut_4_01", name = "EX Tackle",
-              tutorial_type = "action",
-              sequence = { { name = "EX Tackle", hit_type = "H", action_ids = {"S003d003d"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Same motion as tackle, two kick buttons. Armor through attacks.",
-              hints = { "Hold back, then forward + two kick buttons." },
-              difficulty = 2 },
-            { id = "tut_4_02", name = "EX Headbutt",
-              tutorial_type = "action",
-              sequence = { { name = "EX Headbutt", hit_type = "H", action_ids = {"S002c002c"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Invincible reversal. Big damage.",
-              hints = { "Hold down, then up + two punch buttons." },
-              difficulty = 2 },
-            { id = "tut_4_03", name = "EX Knee Drop",
-              tutorial_type = "action",
-              sequence = { { name = "EX Knee Drop", hit_type = "H", action_ids = {"S001c001c"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Air charge, two kick buttons.",
-              hints = { "Jump, hold down, then up + two kick buttons." },
-              difficulty = 3 },
-            { id = "tut_4_04", name = "EX Sphere",
-              tutorial_type = "action",
-              sequence = { { name = "EX Sphere", hit_type = "H", action_ids = {"S00240024"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "Two hits, more advantage on block.",
-              hints = { "Quarter-circle forward + two punch buttons." },
-              difficulty = 2 },
-        }
-    },
-    {
-        name = "Aegis Reflector",
-        opponent = "Urien",
-        description = "This is why you play Urien.",
-        lessons = {
-            { id = "tut_5_01", name = "Activate Aegis",
-              tutorial_type = "action",
-              sequence = { { name = "Aegis (LP)", hit_type = "H", action_ids = {"S003e003e"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "QCF QCF + punch. The super that defines Urien.",
-              hints = { "Two quarter-circle forward motions, then punch. You just placed a wall." },
-              difficulty = 3 },
-            { id = "tut_5_02", name = "Aegis Behind",
-              tutorial_type = "action",
-              sequence = { { name = "Aegis (HP)", hit_type = "H", action_ids = {"S00400040"} } },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = {},
-              description = "HP version places the Aegis behind the opponent. Traps them.",
-              hints = { "QCF QCF + Strong Punch. The wall appears behind them." },
-              difficulty = 3 },
-            { id = "tut_5_03", name = "cr.HP into Aegis",
-              tutorial_type = "combo",
-              sequence = {
-                  { name = "cr.HP", hit_type = "H", action_ids = {"A00180018"} },
-                  { name = "Aegis", hit_type = "H", action_ids = {"S003e003e","S00400040"} },
-              },
-              setup = { p1_life = 0xA0, p2_life = 0xA0, meter = "full", p1_x = 0x0100, p2_x = 0x0180,
-                        fill_h_charge = false, fill_v_charge = false, p2_state = "stand", corner = false },
-              success = { min_combo = 2 },
-              allow_combo_reset = false,
-              description = "Your first Aegis setup. Cancel cr.HP into super.",
-              hints = { "d+HP, then immediately QCF QCF + punch during the cancel window." },
-              difficulty = 4 },
-        }
-    },
-}
+local TUTORIAL_CHAPTERS = {}
 
 -- ============================================================================
 -- [5] PROGRESSION STATE
@@ -1203,6 +1000,10 @@ local engine = {
     -- Stats for current session
     session_attempts = 0,
     session_completions = 0,
+
+    -- Tutorial sequential playthrough
+    tutorial_chapter_idx = nil,   -- which chapter is being played (nil = not in tutorial sequence)
+    tutorial_lesson_idx = nil,    -- current lesson position within that chapter
 }
 
 -- Combo tracker: live display of moves as they land (independent of exercise engine)
@@ -1271,6 +1072,8 @@ local SPHERE_TO_AEGIS = {
 
 local function select_exercise(index)
     index = clamp(index, 1, #exercises)
+    engine.tutorial_chapter_idx = nil
+    engine.tutorial_lesson_idx = nil
     engine.current_exercise_index = index
     engine.current_exercise = exercises[index]
     engine.state = STATE_SETUP
@@ -1343,6 +1146,13 @@ local function select_tutorial_lesson(lesson, opponent_name)
     engine.session_attempts = 0
     engine.session_completions = 0
     engine.block_detected = false
+end
+
+local function start_tutorial_chapter(chapter_idx)
+    local chapter = TUTORIAL_CHAPTERS[chapter_idx]
+    engine.tutorial_chapter_idx = chapter_idx
+    engine.tutorial_lesson_idx = 1
+    select_tutorial_lesson(chapter.lessons[1], chapter.opponent)
 end
 
 local function reset_exercise()
@@ -1427,7 +1237,11 @@ local function engine_active_update()
                 local prog = progression[ex.id]
                 if prog then
                     prog.completions = prog.completions + 1
-                    if prog.completions >= MASTERY_THRESHOLD then prog.mastered = true end
+                    local threshold = get_mastery_threshold(ex)
+                    if prog.completions >= threshold then
+                        prog.completions = threshold
+                        prog.mastered = true
+                    end
                     save_progression()
                 end
             end
@@ -1475,7 +1289,11 @@ local function engine_active_update()
                     local prog = progression[ex.id]
                     if prog then
                         prog.completions = prog.completions + 1
-                        if prog.completions >= MASTERY_THRESHOLD then prog.mastered = true end
+                        local threshold = get_mastery_threshold(ex)
+                        if prog.completions >= threshold then
+                            prog.completions = threshold
+                            prog.mastered = true
+                        end
                         save_progression()
                     end
                 end
@@ -1501,7 +1319,11 @@ local function engine_active_update()
                 local prog = progression[ex.id]
                 if prog then
                     prog.completions = prog.completions + 1
-                    if prog.completions >= MASTERY_THRESHOLD then prog.mastered = true end
+                    local threshold = get_mastery_threshold(ex)
+                    if prog.completions >= threshold then
+                        prog.completions = threshold
+                        prog.mastered = true
+                    end
                     save_progression()
                 end
                 break
@@ -1645,7 +1467,9 @@ local function engine_active_update()
             local prog = progression[ex.id]
             if prog then
                 prog.completions = prog.completions + 1
-                if prog.completions >= MASTERY_THRESHOLD then
+                local threshold = get_mastery_threshold(ex)
+                if prog.completions >= threshold then
+                    prog.completions = threshold
                     prog.mastered = true
                 end
                 save_progression()
@@ -1659,8 +1483,24 @@ local function engine_result_update()
     if engine.result_timer <= 0 then
         if engine.state == STATE_FAIL then
             current_streak = 0
+            reset_exercise()  -- retry same lesson
+        elseif engine.state == STATE_SUCCESS and engine.tutorial_chapter_idx then
+            -- Auto-advance to next lesson in chapter
+            local chapter = TUTORIAL_CHAPTERS[engine.tutorial_chapter_idx]
+            local next_idx = engine.tutorial_lesson_idx + 1
+            if next_idx <= #chapter.lessons then
+                engine.tutorial_lesson_idx = next_idx
+                select_tutorial_lesson(chapter.lessons[next_idx], chapter.opponent)
+            else
+                -- Chapter complete
+                engine.tutorial_chapter_idx = nil
+                engine.tutorial_lesson_idx = nil
+                engine.state = STATE_IDLE
+                engine.current_exercise = nil
+            end
+        else
+            reset_exercise()
         end
-        reset_exercise()
     end
 end
 
@@ -2067,7 +1907,6 @@ local menu = {
     delete_id = nil,       -- exercise ID pending delete confirmation
     sort_mode = "category",
     tutorial_cursor = 1,       -- flat cursor position in tutorial display list
-    tutorial_expanded = 1,     -- which chapter is expanded (1-based, nil = none)
 }
 
 -- Sort modes for exercise list (cycled with HP)
@@ -2367,9 +2206,10 @@ local function draw_info_bar()
 
     local ex = engine.current_exercise
     local seq = ex.sequence
-    local bar_y = SCREEN_H - 30
+    local bar_h = (ex.description or engine.tutorial_chapter_idx) and 40 or 30
+    local bar_y = SCREEN_H - bar_h
 
-    draw_box(0, bar_y, SCREEN_W, 30, COLOR.bg_panel, COLOR.border)
+    draw_box(0, bar_y, SCREEN_W, bar_h, COLOR.bg_panel, COLOR.border)
 
     -- Pre-compute timing summary for completed steps
     local summary = compute_timing_summary()
@@ -2459,6 +2299,18 @@ local function draw_info_bar()
             hint_idx = ((prog.attempts - 1) % #ex.hints) + 1
         end
         draw_text(4, bar_y + 14, "Hint: " .. ex.hints[hint_idx], COLOR.text_orange)
+    end
+
+    -- Description line (tutorial lessons)
+    if ex.description then
+        draw_text(4, bar_y + 26, ex.description, COLOR.text_gray)
+    end
+
+    -- Tutorial chapter progress indicator
+    if engine.tutorial_chapter_idx then
+        local chapter = TUTORIAL_CHAPTERS[engine.tutorial_chapter_idx]
+        local progress = engine.tutorial_lesson_idx .. "/" .. #chapter.lessons
+        draw_text(SCREEN_W - 40, bar_y + 26, progress, COLOR.text_gray)
     end
 end
 
@@ -2550,7 +2402,7 @@ local function draw_result_banner()
         local line_y = banner_y + 16
         local prog = progression[ex.id]
         if prog then
-            local comp_str = prog.completions .. "/" .. MASTERY_THRESHOLD
+            local comp_str = prog.completions .. "/" .. get_mastery_threshold(ex)
             if prog.mastered then
                 comp_str = comp_str .. " MASTERED!"
             end
@@ -2772,7 +2624,7 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
             -- Progress
             if prog and prog.completions > 0 then
                 draw_text(col_prog, row_y,
-                    prog.completions .. "/" .. MASTERY_THRESHOLD, COLOR.text_gray)
+                    prog.completions .. "/" .. get_mastery_threshold(ex), COLOR.text_gray)
             end
         end
         drawn = drawn + 1
@@ -2850,14 +2702,12 @@ end
 
 --- Draw the tutorial tab in the menu
 local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
-    -- Build flat display list matching input handler
+    -- Build flat display list (always expanded)
     local display = {}
     for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
         table.insert(display, { type = "chapter", chapter_idx = ci, chapter = chapter })
-        if menu.tutorial_expanded == ci then
-            for li, lesson in ipairs(chapter.lessons) do
-                table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
-            end
+        for li, lesson in ipairs(chapter.lessons) do
+            table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
         end
     end
 
@@ -2887,7 +2737,6 @@ local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
                 local prog = progression[lesson.id]
                 if prog and prog.mastered then completed = completed + 1 end
             end
-            local expand_icon = (menu.tutorial_expanded == item.chapter_idx) and "v" or ">"
             local chapter_color = COLOR.text_yellow
             if completed == total and total > 0 then chapter_color = COLOR.text_green end
 
@@ -2895,8 +2744,7 @@ local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
                 draw_box(menu_x + 2, row_y - 1, menu_w - 4, row_h, 0xFFFFFF40, COLOR.transparent)
                 highlighted_item = item
             end
-            draw_text(menu_x + 4, row_y, expand_icon, COLOR.text_gray)
-            draw_text(menu_x + 14, row_y, chapter.name:upper(), chapter_color)
+            draw_text(menu_x + 4, row_y, chapter.name:upper(), chapter_color)
             draw_text(menu_x + menu_w - 40, row_y, completed .. "/" .. total, COLOR.text_gray)
         else
             local is_selected = (di == menu.tutorial_cursor)
@@ -3867,6 +3715,152 @@ local function load_exercises()
     end
 end
 
+--- Load tutorial chapters and lessons from urien_lab_tutorial.txt
+local function load_tutorial_chapters()
+    local f = io.open(TUTORIAL_FILE, "r")
+    if not f then
+        print("[Urien Lab] Warning: " .. TUTORIAL_FILE .. " not found")
+        return
+    end
+
+    TUTORIAL_CHAPTERS = {}
+    local current_chapter = nil
+    local current_lesson = nil
+
+    local default_setup = {
+        p1_x = 0x0100, p2_x = 0x0180,
+        p1_life = 0xA0, p2_life = 0xA0,
+        meter = "full",
+        fill_h_charge = false, fill_v_charge = false,
+        p2_state = "stand", corner = false,
+    }
+
+    local function finalize_block()
+        if current_lesson then
+            -- Apply defaults
+            if not current_lesson.setup then
+                current_lesson.setup = {}
+                for k, v in pairs(default_setup) do current_lesson.setup[k] = v end
+            end
+            if not current_lesson.success then
+                current_lesson.success = {}
+            end
+            if not current_lesson.difficulty then
+                current_lesson.difficulty = 1
+            end
+            if current_chapter then
+                table.insert(current_chapter.lessons, current_lesson)
+            end
+            current_lesson = nil
+        elseif current_chapter and not current_chapter._added then
+            current_chapter._added = true
+            table.insert(TUTORIAL_CHAPTERS, current_chapter)
+        end
+    end
+
+    for line in f:lines() do
+        if line == "---" then
+            finalize_block()
+        else
+            local key, value = line:match("^(.-):(.*)")
+            if key and value then
+                if key == "CHAPTER" then
+                    current_chapter = { name = value, lessons = {}, _added = false }
+                    current_lesson = nil
+                elseif key == "OPPONENT" and current_chapter then
+                    current_chapter.opponent = value
+                elseif key == "DESC" then
+                    if current_lesson then
+                        current_lesson.description = value
+                    elseif current_chapter then
+                        current_chapter.description = value
+                    end
+                elseif key == "ID" then
+                    current_lesson = { id = value }
+                elseif key == "NAME" and current_lesson then
+                    current_lesson.name = value
+                elseif key == "TYPE" and current_lesson then
+                    current_lesson.tutorial_type = value
+                elseif key == "SEQ" and current_lesson then
+                    current_lesson.sequence = {}
+                    for part in value:gmatch("[^|]+") do
+                        local name, hit_type, ids_str = part:match("^(.-),(.-),(.*)")
+                        if name then
+                            local action_ids = {}
+                            for aid in ids_str:gmatch("[^;]+") do
+                                table.insert(action_ids, normalize_action_string(aid))
+                            end
+                            table.insert(current_lesson.sequence, {
+                                name = name,
+                                hit_type = hit_type,
+                                action_ids = action_ids,
+                            })
+                        end
+                    end
+                elseif key == "SETUP" and current_lesson then
+                    local p1x, p2x, p1l, p2l, meter, hc, vc, p2s, corner =
+                        value:match("^(%x+),(%x+),(%x+),(%x+),(%w+),(%d+),(%d+),(%w+),(%d+)")
+                    if p1x then
+                        current_lesson.setup = {
+                            p1_x = tonumber(p1x, 16),
+                            p2_x = tonumber(p2x, 16),
+                            p1_life = tonumber(p1l, 16),
+                            p2_life = tonumber(p2l, 16),
+                            meter = meter,
+                            fill_h_charge = (hc == "1"),
+                            fill_v_charge = (vc == "1"),
+                            p2_state = p2s,
+                            corner = (corner == "1"),
+                        }
+                    end
+                elseif key == "SUCCESS" and current_lesson then
+                    current_lesson.success = { min_combo = tonumber(value) or 1 }
+                elseif key == "HINT" and current_lesson then
+                    current_lesson.hints = { value }
+                elseif key == "DIFFICULTY" and current_lesson then
+                    current_lesson.difficulty = tonumber(value) or 1
+                elseif key == "BLOCK_MATCH" and current_lesson then
+                    current_lesson.block_match = value
+                elseif key == "DUMMY_ATTACK" and current_lesson then
+                    local parts = {}
+                    for p in value:gmatch("[^,]+") do
+                        table.insert(parts, p)
+                    end
+                    if #parts >= 3 then
+                        current_lesson.dummy_attack = {
+                            button = parts[1],
+                            delay = tonumber(parts[2]) or 40,
+                            repeat_interval = tonumber(parts[3]) or 90,
+                        }
+                        if parts[4] == "crouch" then
+                            current_lesson.dummy_attack.crouch = true
+                        end
+                    end
+                elseif key == "PUNISH_IDS" and current_lesson then
+                    current_lesson.punish_action_ids = {}
+                    for aid in value:gmatch("[^;]+") do
+                        table.insert(current_lesson.punish_action_ids, normalize_action_string(aid))
+                    end
+                elseif key == "RESETOK" and current_lesson then
+                    current_lesson.allow_combo_reset = (value == "1")
+                end
+            end
+        end
+    end
+
+    -- Finalize last block
+    finalize_block()
+
+    f:close()
+
+    local total_lessons = 0
+    for _, ch in ipairs(TUTORIAL_CHAPTERS) do
+        ch._added = nil  -- clean up internal flag
+        total_lessons = total_lessons + #ch.lessons
+    end
+    print("[Urien Lab] Loaded " .. #TUTORIAL_CHAPTERS .. " tutorial chapters (" .. total_lessons .. " lessons)")
+end
+
 --- Reload exercises from file (after user edits names, etc.)
 local function reload_exercises()
     -- Clear all exercises
@@ -4045,14 +4039,12 @@ local function handle_menu_input()
     end
 
     if menu.mode == MENU_TUTORIAL then
-        -- Build flat display list for navigation
+        -- Build flat display list (always expanded)
         local display = {}
         for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
             table.insert(display, { type = "chapter", chapter_idx = ci })
-            if menu.tutorial_expanded == ci then
-                for li, lesson in ipairs(chapter.lessons) do
-                    table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
-                end
+            for li, lesson in ipairs(chapter.lessons) do
+                table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
             end
         end
 
@@ -4066,28 +4058,12 @@ local function handle_menu_input()
             local item = display[menu.tutorial_cursor]
             if item then
                 if item.type == "chapter" then
-                    -- Toggle expand/collapse
-                    if menu.tutorial_expanded == item.chapter_idx then
-                        menu.tutorial_expanded = nil
-                    else
-                        menu.tutorial_expanded = item.chapter_idx
-                        -- Recalculate cursor to stay on chapter header
-                        menu.tutorial_cursor = item.chapter_idx  -- simple: chapter rows are 1-indexed before expansion
-                        -- Rebuild display and find the chapter position
-                        local new_pos = 0
-                        for ci2 = 1, #TUTORIAL_CHAPTERS do
-                            new_pos = new_pos + 1
-                            if ci2 == item.chapter_idx then
-                                menu.tutorial_cursor = new_pos
-                                break
-                            end
-                            if menu.tutorial_expanded == ci2 then
-                                new_pos = new_pos + #TUTORIAL_CHAPTERS[ci2].lessons
-                            end
-                        end
-                    end
+                    start_tutorial_chapter(item.chapter_idx)
+                    menu.show = false
                 elseif item.type == "lesson" then
                     local chapter = TUTORIAL_CHAPTERS[item.chapter_idx]
+                    engine.tutorial_chapter_idx = item.chapter_idx
+                    engine.tutorial_lesson_idx = item.lesson_idx
                     select_tutorial_lesson(item.lesson, chapter and chapter.opponent)
                     menu.show = false
                 end
@@ -4096,21 +4072,17 @@ local function handle_menu_input()
             if engine.state ~= STATE_IDLE then
                 engine.state = STATE_IDLE
                 engine.current_exercise = nil
+                engine.tutorial_chapter_idx = nil
+                engine.tutorial_lesson_idx = nil
             else
                 menu.show = false
             end
         end
 
-        -- Clamp cursor after display list may have changed
-        local new_display_count = #TUTORIAL_CHAPTERS
-        if menu.tutorial_expanded then
-            new_display_count = 0
-            for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
-                new_display_count = new_display_count + 1
-                if menu.tutorial_expanded == ci then
-                    new_display_count = new_display_count + #chapter.lessons
-                end
-            end
+        -- Clamp cursor: all chapters + all lessons (always expanded)
+        local new_display_count = 0
+        for _, chapter in ipairs(TUTORIAL_CHAPTERS) do
+            new_display_count = new_display_count + 1 + #chapter.lessons
         end
         if menu.tutorial_cursor > new_display_count then
             menu.tutorial_cursor = math.max(1, new_display_count)
@@ -4613,6 +4585,7 @@ end
 
 -- Testing: export internals and skip emulator registration
 if TESTING then
+    load_tutorial_chapters()
     init_progression()
     return {
         engine = engine,
@@ -4620,6 +4593,7 @@ if TESTING then
         progression = progression,
         menu = menu,
         TUTORIAL_CHAPTERS = TUTORIAL_CHAPTERS,
+        load_tutorial_chapters = load_tutorial_chapters,
         STATE_IDLE = STATE_IDLE,
         STATE_SETUP = STATE_SETUP,
         STATE_ACTIVE = STATE_ACTIVE,
@@ -4630,9 +4604,13 @@ if TESTING then
         MENU_CHAR_EXERCISES = MENU_CHAR_EXERCISES,
         MENU_OPPONENT = MENU_OPPONENT,
         MASTERY_THRESHOLD = MASTERY_THRESHOLD,
+        TUTORIAL_MASTERY_THRESHOLD = TUTORIAL_MASTERY_THRESHOLD,
+        get_mastery_threshold = get_mastery_threshold,
         select_tutorial_lesson = select_tutorial_lesson,
+        start_tutorial_chapter = start_tutorial_chapter,
         engine_active_update = engine_active_update,
         engine_setup_update = engine_setup_update,
+        engine_result_update = engine_result_update,
         engine_update = engine_update,
         reset_exercise = reset_exercise,
         lock_dummy = lock_dummy,
@@ -4641,6 +4619,9 @@ end
 
 -- Fetch available save states from manifest (for on-demand download)
 fetch_available_saves()
+
+-- Load tutorial chapters from file
+load_tutorial_chapters()
 
 -- Load exercises FIRST (before progression, so init_progression sees exercise IDs)
 load_exercises()
