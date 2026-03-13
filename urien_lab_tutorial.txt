@@ -1,0 +1,339 @@
+---
+CHAPTER:Normals
+OPPONENT:Urien
+DESC:Every combo starts with a button.
+---
+ID:tut_1_01
+NAME:st.LP
+TYPE:hit
+SEQ:st.LP,H,A00000000;A00010001
+SUCCESS:1
+DESC:Fastest button. Use it to interrupt pressure.
+HINT:Press Light Punch while standing.
+DIFFICULTY:1
+---
+ID:tut_1_02
+NAME:st.MP
+TYPE:hit
+SEQ:st.MP,H,A0000009e;A0001009e;A00030003
+SUCCESS:1
+DESC:Your bread and butter. Fast, reaches far, cancels into everything.
+HINT:Press Medium Punch while standing.
+DIFFICULTY:1
+---
+ID:tut_1_03
+NAME:st.HP
+TYPE:hit
+SEQ:st.HP,H,A00060006
+SUCCESS:1
+DESC:Big damage, slow startup. Whiff punish tool.
+HINT:Press Strong Punch while standing.
+DIFFICULTY:1
+---
+ID:tut_1_04
+NAME:f.MP
+TYPE:hit
+SEQ:f.MP,H,A00050005
+SUCCESS:1
+DESC:Command normal. Two hits, good in block strings.
+HINT:Hold forward, press Medium Punch.
+DIFFICULTY:1
+---
+ID:tut_1_05
+NAME:f.HP
+TYPE:hit
+SEQ:f.HP,H,A00080008;A0005009f
+SUCCESS:1
+DESC:Overhead punch. Launches on hit.
+HINT:This is an overhead - Use it.
+DIFFICULTY:1
+---
+ID:tut_1_06
+NAME:st.LK
+TYPE:hit
+SEQ:st.LK,H,A00090009;A000a000a
+SUCCESS:1
+DESC:Quick short kick. Tick throw setup.
+HINT:Press Light Kick while standing.
+DIFFICULTY:1
+---
+ID:tut_1_07
+NAME:st.MK
+TYPE:hit
+SEQ:st.MK,H,A000c000c;A000d000d
+SUCCESS:1
+DESC:Solid mid-range poke.
+HINT:Press Medium Kick while standing.
+DIFFICULTY:1
+---
+ID:tut_1_08
+NAME:st.HK
+TYPE:hit
+SEQ:st.HK,H,A000f000f;A00100010
+SUCCESS:1
+DESC:Huge range, slow. Catches people walking in.
+HINT:Press Strong Kick while standing.
+DIFFICULTY:1
+---
+ID:tut_1_09
+NAME:cr.LP
+TYPE:hit
+SEQ:cr.LP,H,A00120012
+SUCCESS:1
+DESC:Fast low jab. Confirms into cr.MK or throw.
+HINT:Hold down, press Light Punch.
+DIFFICULTY:1
+---
+ID:tut_1_10
+NAME:cr.MP
+TYPE:hit
+SEQ:cr.MP,H,A00150015
+SUCCESS:1
+DESC:Anti-air at close range.
+HINT:Hold down, press Medium Punch.
+DIFFICULTY:1
+---
+ID:tut_1_11
+NAME:cr.HP
+TYPE:hit
+SEQ:cr.HP,H,A00180018
+SUCCESS:1
+DESC:The launcher that starts real damage.
+HINT:Hold down, press Strong Punch.
+DIFFICULTY:1
+---
+ID:tut_1_12
+NAME:cr.LK
+TYPE:hit
+SEQ:cr.LK,H,A001b001b
+SUCCESS:1
+DESC:Low poke. Good for tick throws.
+HINT:Hold down, press Light Kick.
+DIFFICULTY:1
+---
+ID:tut_1_13
+NAME:cr.MK
+TYPE:hit
+SEQ:cr.MK,H,A001e001e
+SUCCESS:1
+DESC:Footsie tool. Controls ground space.
+HINT:Hold down, press Medium Kick.
+DIFFICULTY:1
+---
+ID:tut_1_14
+NAME:cr.HK
+TYPE:hit
+SEQ:cr.HK,H,A00210021
+SUCCESS:1
+DESC:Sweep. Knockdown from max range. Whiff punish tool.
+HINT:Hold down, press Strong Kick.
+DIFFICULTY:1
+---
+ID:tut_1_15
+NAME:j.LP
+TYPE:hit
+SEQ:j.LP,H,A00240024
+SUCCESS:1
+DESC:Air-to-air. Comes out fast.
+HINT:Jump forward, press Light Punch.
+DIFFICULTY:1
+---
+ID:tut_1_16
+NAME:j.MP
+TYPE:hit
+SEQ:j.MP,H,A00260026
+SUCCESS:1
+DESC:Crossup potential. Good air-to-air.
+HINT:Jump forward, press Medium Punch.
+DIFFICULTY:1
+---
+ID:tut_1_17
+NAME:j.HP
+TYPE:hit
+SEQ:j.HP,H,A00400028;A00280028;A00340028
+SUCCESS:1
+DESC:Heavy jump-in punch. Lots of hitstun.
+HINT:Jump forward, press Strong Punch.
+DIFFICULTY:1
+---
+ID:tut_1_18
+NAME:j.LK
+TYPE:hit
+SEQ:j.LK,H,A002a002a
+SUCCESS:1
+DESC:Fast air kick. Good for empty jump mixups.
+HINT:Jump forward, press Light Kick.
+DIFFICULTY:1
+---
+ID:tut_1_19
+NAME:j.MK
+TYPE:hit
+SEQ:j.MK,H,A002c002c
+SUCCESS:1
+DESC:Crossup kick. Key for left/right mixups.
+HINT:Jump forward, press Medium Kick.
+DIFFICULTY:1
+---
+ID:tut_1_20
+NAME:j.HK
+TYPE:hit
+SEQ:j.HK,H,A0046002e;A002e002e;A003a002e
+SUCCESS:1
+DESC:Jump-in attack. High priority, great range.
+HINT:Jump forward, press Strong Kick at the peak.
+DIFFICULTY:1
+---
+ID:tut_1_21
+NAME:UOH
+TYPE:action
+SEQ:UOH,H,S00310031
+DESC:MP+MK overhead. Beats crouch block.
+HINT:Press Medium Punch + Medium Kick together.
+DIFFICULTY:1
+---
+CHAPTER:Blocking
+OPPONENT:Urien
+DESC:That metallic clang is the best block sound in fighting games.
+---
+ID:tut_2_01
+NAME:Block a Punch
+TYPE:block
+BLOCK_MATCH:G
+DUMMY_ATTACK:P2 Strong Punch,40,90
+SEQ:Block,H,G00010001
+DESC:Hold back. Hear that metallic clang. Appreciate it.
+HINT:Hold back (away from opponent) before the attack connects.
+DIFFICULTY:1
+---
+ID:tut_2_02
+NAME:Block a Low
+TYPE:block
+BLOCK_MATCH:G00020002
+DUMMY_ATTACK:P2 Medium Kick,40,90,crouch
+SEQ:Crouch Block,H,G00020002
+DESC:Low attacks must be blocked crouching. Down-back is your friend.
+HINT:Hold down-back to crouch block.
+DIFFICULTY:1
+---
+ID:tut_2_03
+NAME:Block then Punish
+TYPE:block_punish
+BLOCK_MATCH:G
+PUNISH_IDS:A001e001e
+DUMMY_ATTACK:P2 Strong Punch,40,120
+SEQ:Block > cr.MK,H,A001e001e
+SUCCESS:1
+DESC:That clang means it's your turn. Make them pay.
+HINT:Block the attack, then immediately press d+MK to punish.
+DIFFICULTY:2
+---
+CHAPTER:Special Moves
+OPPONENT:Urien
+DESC:Urien is a charge character. Hold a direction, release the opposite.
+---
+ID:tut_3_01
+NAME:Chariot Tackle
+TYPE:action
+SEQ:L.Tackle,H,S003a003a
+DESC:Hold back, then forward + kick. Feel the charge.
+HINT:Hold back for ~1 second, then press forward + Light Kick together.
+DIFFICULTY:2
+---
+ID:tut_3_02
+NAME:Headbutt
+TYPE:action
+SEQ:L.Headbutt,H,S00290029
+DESC:Vertical charge: hold down, then up + punch.
+HINT:Hold down for ~1 second, then press up + Light Punch together.
+DIFFICULTY:2
+---
+ID:tut_3_03
+NAME:Metallic Sphere
+TYPE:action
+SEQ:L.Sphere,H,S00210021
+DESC:Quarter-circle forward + punch. Urien's fireball.
+HINT:Roll the stick from down to forward, press Light Punch.
+DIFFICULTY:2
+---
+ID:tut_3_04
+NAME:Knee Drop
+TYPE:action
+SEQ:L.Knee Drop,H,S00190019
+DESC:Air charge move. Jump, hold down, then up + kick.
+HINT:Hold down, then press up + Light Kick.
+DIFFICULTY:3
+---
+CHAPTER:EX Moves
+OPPONENT:Urien
+DESC:Two buttons. More meter. More damage.
+---
+ID:tut_4_01
+NAME:EX Tackle
+TYPE:action
+SEQ:EX Tackle,H,S003d003d
+DESC:Same motion as tackle, two kick buttons. Armor through attacks.
+HINT:Hold back, then forward + two kick buttons.
+DIFFICULTY:2
+---
+ID:tut_4_02
+NAME:EX Headbutt
+TYPE:action
+SEQ:EX Headbutt,H,S002c002c
+DESC:Invincible reversal. Big damage.
+HINT:Hold down, then up + two punch buttons.
+DIFFICULTY:2
+---
+ID:tut_4_03
+NAME:EX Knee Drop
+TYPE:action
+SEQ:EX Knee Drop,H,S001c001c
+DESC:Air charge, two kick buttons.
+HINT:Hold down, then press up + 2 kick buttons.
+DIFFICULTY:3
+---
+ID:tut_4_04
+NAME:EX Sphere
+TYPE:action
+SEQ:EX Sphere,H,S00240024
+DESC:Two hits, more advantage on block.
+HINT:Quarter-circle forward + two punch buttons.
+DIFFICULTY:2
+---
+CHAPTER:Aegis Reflector
+OPPONENT:Urien
+DESC:Aegis, Mirror, Wall. The unblockable tool.
+---
+ID:tut_5_01
+NAME:Jab Aegis
+TYPE:action
+SEQ:Aegis (LP),H,S003e003e
+DESC:QCF QCF + LP. The super that defines Urien.
+HINT:Two quarter-circle forward motions, then punch. Congratulations.
+DIFFICULTY:3
+---
+ID:tut_5_02
+NAME:Strong Aegis
+TYPE:action
+SEQ:Aegis (MP),H,S003e003e
+DESC:QCF QCF + MP. The super that defines Urien.
+HINT:Two quarter-circle forward motions, then punch.
+DIFFICULTY:3
+---
+ID:tut_5_03
+NAME:Fierce Aegis
+TYPE:action
+SEQ:Aegis (HP),H,S00400040
+DESC:HP version places the Aegis behind the opponent. Traps them.
+HINT:QCF QCF + HP. The furthest a mirror can go.
+DIFFICULTY:3
+---
+ID:tut_5_04
+NAME:cr.HP xx Aegis
+TYPE:combo
+SEQ:cr.HP,H,A00180018|Aegis (EX),H,S00400040
+SUCCESS:2
+RESETOK:0
+DESC:Your first Aegis setup. Cancel cr.HP into super.
+HINT:d+HP, then immediately QCF QCF + punch during the cancel window.
+DIFFICULTY:4
+---

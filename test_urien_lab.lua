@@ -240,9 +240,9 @@ test("block_punish lesson has punish_action_ids", function()
 end)
 
 test("combo lesson has allow_combo_reset", function()
-    local lesson = find_lesson("tut_5_03")
-    assert_eq(lesson.allow_combo_reset, false, "tut_5_03 should have allow_combo_reset=false")
-    assert_eq(lesson.success.min_combo, 2, "tut_5_03 should require 2-hit combo")
+    local lesson = find_lesson("tut_5_04")
+    assert_eq(lesson.allow_combo_reset, false, "tut_5_04 should have allow_combo_reset=false")
+    assert_eq(lesson.success.min_combo, 2, "tut_5_04 should require 2-hit combo")
 end)
 
 test("all lessons have required fields", function()
@@ -522,7 +522,7 @@ print("\n--- Combo Detection ---")
 
 test("cr.HP into Aegis combo succeeds", function()
     reset()
-    start_lesson("tut_5_03")  -- cr.HP into Aegis (combo type)
+    start_lesson("tut_5_04")  -- cr.HP xx Aegis (combo type, 2 steps)
 
     -- Step 1: cr.HP hits
     lab.game_state.p1.action_string = "A00180018"
@@ -534,7 +534,7 @@ test("cr.HP into Aegis combo succeeds", function()
 
     -- Step 2: Aegis connects
     lab.game_state.frame_count = lab.game_state.frame_count + 10
-    lab.game_state.p1.action_string = "S003e003e"
+    lab.game_state.p1.action_string = "S00400040"
     lab.game_state.combo_counter = 2
     lab.game_state.combo_counter_prev = 1
     lab.engine_active_update()
@@ -543,7 +543,7 @@ end)
 
 test("combo drops are detected", function()
     reset()
-    start_lesson("tut_5_03")
+    start_lesson("tut_5_04")
 
     -- Step 1 hits
     lab.game_state.p1.action_string = "A00180018"

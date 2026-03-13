@@ -17,14 +17,14 @@
 --   Fierce (P1 Strong Punch) = Save current game state for opponent
 --
 -- Training Controls:
---   Start        = Open/close exercise menu
+--   Start        = Toggle exercise capture mode (closes menu if open)
+--   Coin         = Open main menu (Tutorial, Combos, Record, etc.)
 --   Left/Right   = Switch menu tabs (Exercises / Opponent)
 --   Up/Down      = Navigate exercises
 --   Jab (P1 Weak Punch)      = Select exercise
 --   Strong (P1 Medium Punch)  = Stop exercise (in menu) / Close menu
 --   LK (P1 Weak Kick)         = Toggle exercise side (L/R)
 --   MK (P1 Medium Kick)       = Tag/untag opponent on exercise
---   Coin         = Toggle exercise capture mode
 --   Alt+2        = Toggle numpad notation
 --   Alt+3        = Reset current exercise progress
 --   Alt+5        = Toggle menu (reliable backup for Start)
@@ -1913,6 +1913,20 @@ local menu = {
 local SORT_MODES = {"category", "difficulty", "name"}
 local SORT_LABELS = { category = "Category", difficulty = "Diff", name = "Name" }
 
+-- Main menu (Coin button hub)
+local MAIN_MENU_ITEMS = {
+    { label = "Tutorial",        desc = "Learn Urien step by step" },
+    { label = "Combo Trials",    desc = "Practice combos and links" },
+    { label = "Free Training",   desc = "Open practice with dummy" },
+    { label = "Record Combo",    desc = "Capture your own combos" },
+    { label = "Change Opponent", desc = "Pick a different matchup" },
+}
+local main_menu = {
+    show = false,
+    cursor = 1,
+    was_frozen = false,
+}
+
 --- Rebuild both exercise index lists (all + character-filtered)
 --- Sorts by category order (combo → unblockable → sequence → parry)
 rebuild_filtered_exercises = function()
@@ -2174,7 +2188,7 @@ local function draw_header()
         end
         draw_text(4, 8, exercise_label, COLOR.text_yellow)
     else
-        draw_text(4, 8, "Start=Menu  Coin=Record", COLOR.text_gray)
+        draw_text(4, 8, "Coin=Menu  Start=Record", COLOR.text_gray)
     end
 
     draw_text(SCREEN_W - 50, 8, #exercises .. " exercises", COLOR.text_gray)
@@ -2520,9 +2534,9 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
         if #exercises > 0 and filter_active and not is_all then
             local opp_name = selected_opponent and selected_opponent.name or "opponent"
             draw_text(menu_x + 4, menu_y + 40,
-                "No exercises for " .. opp_name .. ". Press Coin to record.", COLOR.text_yellow)
+                "No exercises for " .. opp_name .. ". Press Start to record.", COLOR.text_yellow)
         else
-            draw_text(menu_x + 4, menu_y + 40, "No exercises. Press Coin to record a combo.", COLOR.text_yellow)
+            draw_text(menu_x + 4, menu_y + 40, "No exercises. Press Start to record a combo.", COLOR.text_yellow)
         end
         return
     end
@@ -2852,6 +2866,51 @@ local function draw_menu()
     else
         draw_opponent_tab(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
     end
+end
+
+--- Draw main menu (Coin hub)
+local function draw_main_menu()
+    if not main_menu.show then return end
+
+    local items = MAIN_MENU_ITEMS
+    local row_h = 14
+    local pad = 8
+    local title_h = 16
+    local footer_h = 12
+    local menu_h = title_h + #items * row_h + pad + footer_h + pad
+    local menu_w = 180
+    local mx = math.floor((SCREEN_W - menu_w) / 2)
+    local my = math.floor((SCREEN_H - menu_h) / 2)
+
+    draw_gradient_box(mx, my, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
+
+    -- Title
+    draw_text(mx + math.floor(menu_w / 2) - 20, my + 4, "URIEN LAB", COLOR.text_cyan)
+
+    -- Items
+    local list_y = my + title_h
+    for i, item in ipairs(items) do
+        local y = list_y + (i - 1) * row_h
+        local is_sel = (i == main_menu.cursor)
+        local label_color = is_sel and COLOR.text_yellow or COLOR.text_white
+        local desc_color = is_sel and COLOR.text_gray or COLOR.transparent
+
+        -- Cursor indicator
+        if is_sel then
+            draw_box(mx + 2, y, menu_w - 4, row_h, 0x222244FF, 0x00000000)
+            draw_text(mx + pad, y + 2, ">", COLOR.text_yellow)
+        end
+        draw_text(mx + pad + 8, y + 2, item.label, label_color)
+
+        -- Description for selected item (right-aligned or below)
+        if is_sel then
+            draw_text(mx + pad, list_y + #items * row_h + 2, item.desc, COLOR.text_gray)
+        end
+    end
+
+    -- Footer
+    local fy = my + menu_h - footer_h - 2
+    draw_text(mx + pad, fy, "LP=Select  Coin=Close", COLOR.text_gray)
 end
 
 --- Draw debug info
@@ -4238,6 +4297,65 @@ local function handle_menu_input()
 end
 
 --- Handle general input
+--- Handle main menu input (Coin hub)
+local function handle_main_menu_input()
+    if not main_menu.show then return end
+    local items = MAIN_MENU_ITEMS
+
+    if is_pressed("P1 Up") then
+        main_menu.cursor = main_menu.cursor - 1
+        if main_menu.cursor < 1 then main_menu.cursor = #items end
+    elseif is_pressed("P1 Down") then
+        main_menu.cursor = main_menu.cursor + 1
+        if main_menu.cursor > #items then main_menu.cursor = 1 end
+    elseif is_pressed("P1 Weak Punch") then
+        local choice = main_menu.cursor
+        main_menu.show = false
+
+        -- Choices 1-4 need a match running; enter training if possible
+        if choice >= 1 and choice <= 4 then
+            if app_state == APP_CHARSELECT and game_state.playing then
+                app_state = APP_TRAINING
+                charselect_visible = false
+            end
+        end
+
+        if choice == 1 then
+            -- Tutorial
+            menu.show = true
+            menu.mode = MENU_TUTORIAL
+            if engine.state == STATE_ACTIVE then
+                engine.state = STATE_SETUP
+                engine.setup_timer = SETUP_DELAY_FRAMES
+            end
+        elseif choice == 2 then
+            -- Combo Trials
+            menu.show = true
+            menu.mode = MENU_ALL_EXERCISES
+            if engine.state == STATE_ACTIVE then
+                engine.state = STATE_SETUP
+                engine.setup_timer = SETUP_DELAY_FRAMES
+            end
+        elseif choice == 3 then
+            -- Free Training
+            menu.show = false
+            engine.state = STATE_IDLE
+            engine.current_exercise = nil
+            engine.current_exercise_index = nil
+            engine.tutorial_chapter_idx = nil
+            engine.tutorial_lesson_idx = nil
+        elseif choice == 4 then
+            -- Record Combo
+            capture_toggle()
+        elseif choice == 5 then
+            -- Change Opponent
+            menu.show = false
+            app_state = APP_CHARSELECT
+            charselect_visible = true
+        end
+    end
+end
+
 local function handle_input()
     -- Category selector blocks all other input while active
     if cat_sel.active then
@@ -4245,13 +4363,13 @@ local function handle_input()
         return
     end
 
-    -- Start button toggles menu
-    if is_pressed("P1 Start") then
-        if menu.show then
-            menu.show = false
+    -- Coin = Toggle main menu
+    if is_pressed("P1 Coin") then
+        if main_menu.show then
+            main_menu.show = false
         else
-            menu.show = true
-            -- Pause exercise when opening menu
+            main_menu.show = true
+            menu.show = false  -- close exercise menu if open
             if engine.state == STATE_ACTIVE then
                 engine.state = STATE_SETUP
                 engine.setup_timer = SETUP_DELAY_FRAMES
@@ -4259,13 +4377,24 @@ local function handle_input()
         end
     end
 
-    -- Coin = Toggle record-to-exercise capture
-    if is_pressed("P1 Coin") then
-        capture_toggle()
+    -- Main menu blocks all other input while active
+    if main_menu.show then
+        handle_main_menu_input()
+        return
     end
 
     if menu.show then
-        handle_menu_input()
+        -- Start closes exercise menu
+        if is_pressed("P1 Start") then
+            menu.show = false
+        else
+            handle_menu_input()
+        end
+    else
+        -- Start button toggles recording
+        if is_pressed("P1 Start") then
+            capture_toggle()
+        end
     end
 end
 
@@ -4321,12 +4450,35 @@ local function on_frame()
     -- Game character select: P1 selecting (1), P2 debounce (2), or P2 selecting (3)
     if charselect_seq >= 1 and charselect_seq <= 3 then
         read_input()
-        update_charselect_sequence()
         if is_pressed("P1 Coin") then
-            charselect_visible = not charselect_visible
+            main_menu.show = not main_menu.show
         end
-        if charselect_visible then
-            handle_charselect_input()
+        if main_menu.show then
+            main_menu.was_frozen = true
+            handle_main_menu_input()
+            freeze_game()
+        elseif main_menu.was_frozen then
+            -- Stay frozen until all buttons released so the closing press
+            -- doesn't pass through to the game's character select
+            local any_held = false
+            for _, btn in ipairs({
+                "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
+                "P1 Weak Kick", "P1 Medium Kick", "P1 Strong Kick",
+                "P1 Start", "P1 Up", "P1 Down", "P1 Left", "P1 Right",
+            }) do
+                if input_current[btn] then any_held = true; break end
+            end
+            if not any_held then
+                main_menu.was_frozen = false
+            else
+                freeze_game()
+            end
+        else
+            -- Only update game char select when menu is fully closed
+            update_charselect_sequence()
+            if charselect_visible then
+                handle_charselect_input()
+            end
         end
         if charselect_seq == 3 then  -- P2 selecting: swap P1↔P2
             swap_inputs()
@@ -4359,6 +4511,14 @@ local function on_frame()
     read_game_state()
 
     if app_state == APP_CHARSELECT then
+        -- Main menu takes priority over character select
+        if is_pressed("P1 Coin") then
+            main_menu.show = not main_menu.show
+        end
+        if main_menu.show then
+            handle_main_menu_input()
+            return
+        end
         handle_charselect_input()
         -- If we just transitioned to training, skip this frame so Start
         -- doesn't also toggle the exercise menu
@@ -4420,15 +4580,16 @@ local function on_gui()
     -- Game character select sequence: freeze timer and draw HUD
     if charselect_seq >= 1 and charselect_seq <= 3 then
         memory.writebyte(MEM.char_select_timer, 0x69)
-        if charselect_visible then
+        if charselect_visible and not main_menu.show then
             draw_charselect()
-        else
+        elseif not main_menu.show then
             local msg = charselect_seq == 1
                 and "Select your character"
                 or "Select opponent"
             draw_text(4, 4, "URIEN LAB -- " .. msg, COLOR.text_cyan)
-            draw_text(4, 14, "Coin = Quick-load matchup", COLOR.text_gray)
+            draw_text(4, 14, "Coin = Menu", COLOR.text_gray)
         end
+        draw_main_menu()
         return
     elseif charselect_seq == 4 then  -- transitioning
         draw_text(4, 4, "Loading match...", COLOR.text_cyan)
@@ -4439,7 +4600,7 @@ local function on_gui()
         -- Freeze/unfreeze game logic during menu/popup states.
         -- After menu closes, stay frozen until all buttons are released
         -- so the closing press doesn't pass through to the game.
-        local menu_active = menu.show or cat_sel.active
+        local menu_active = main_menu.show or menu.show or cat_sel.active
         if menu_active then
             menu.was_frozen = true
         end
@@ -4514,14 +4675,15 @@ local function on_gui()
     end
 
     if app_state == APP_CHARSELECT then
-        if charselect_visible and game_state.playing then
+        if (charselect_visible or main_menu.show) and game_state.playing then
             memory.writebyte(MEM.game_freeze, 0xFF)
         end
-        if charselect_visible then
+        if charselect_visible and not main_menu.show then
             draw_charselect()
-        else
+        elseif not main_menu.show then
             draw_text(4, 4, "URIEN LAB -- Press Start for menu", COLOR.text_cyan)
         end
+        draw_main_menu()
         return
     end
 
@@ -4538,6 +4700,7 @@ local function on_gui()
     draw_result_banner()
     draw_setup_overlay()
     draw_menu()
+    draw_main_menu()
     draw_debug()
 
     -- Category selector or exercise creation banner
@@ -4592,6 +4755,8 @@ if TESTING then
         game_state = game_state,
         progression = progression,
         menu = menu,
+        main_menu = main_menu,
+        MAIN_MENU_ITEMS = MAIN_MENU_ITEMS,
         TUTORIAL_CHAPTERS = TUTORIAL_CHAPTERS,
         load_tutorial_chapters = load_tutorial_chapters,
         STATE_IDLE = STATE_IDLE,
@@ -4707,7 +4872,7 @@ print("    Left/Right= Switch tabs (Exercises/Opponent)")
 print("    LK        = Toggle exercise side (L/R)")
 print("    MK        = Tag/untag opponent on exercise")
 print("    MP        = Stop exercise (in menu)")
-print("  Coin        = Toggle capture mode")
+print("  Start       = Toggle capture mode")
 print("  Alt+1       = Return to character select")
 print("  Alt+2       = Toggle notation (SF/Numpad)")
 print("  Alt+3       = Reset current exercise progress")
