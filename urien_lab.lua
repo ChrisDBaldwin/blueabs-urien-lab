@@ -7,8 +7,8 @@
 -- Flow:
 --   1. Script loads -> game's native character select screen (if character_select.fs exists)
 --   2. Pick P1 and P2 characters, both lock in -> fast-forwards to match
---   3. In training mode, press Start to open exercise menu
---   4. Select a combo to practice
+--   3. In training mode, press Coin to open main menu, pick Tutorial or Combo Trials
+--   4. Select an exercise to practice, or press Start to record your own
 --   Alt+1 = Return to character select at any time
 --
 -- Character Select Controls:
@@ -4867,16 +4867,16 @@ print("    D-Pad     = Navigate characters")
 print("    Jab       = Load opponent state")
 print("    Fierce    = Save current state")
 print("  TRAINING:")
-print("    Start     = Open exercise menu")
-print("    Left/Right= Switch tabs (Exercises/Opponent)")
+print("    Coin      = Open main menu")
+print("    Start     = Toggle recording")
+print("    Left/Right= Switch tabs (Tutorial/All/Character/Opponent)")
 print("    LK        = Toggle exercise side (L/R)")
 print("    MK        = Tag/untag opponent on exercise")
 print("    MP        = Stop exercise (in menu)")
-print("  Start       = Toggle capture mode")
 print("  Alt+1       = Return to character select")
 print("  Alt+2       = Toggle notation (SF/Numpad)")
 print("  Alt+3       = Reset current exercise progress")
 print("  Alt+4       = Toggle debug display")
-print("  Alt+5       = Toggle menu (backup)")
+print("  Alt+5       = Toggle exercise menu directly")
 print("  Alt+9       = Reload exercises (after editing file)")
 print("===========================================")
