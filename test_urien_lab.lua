@@ -603,8 +603,8 @@ end)
 -- ============================================================================
 print("\n--- Menu ---")
 
-test("default tab is Tutorial", function()
-    assert_eq(lab.menu.mode, lab.MENU_TUTORIAL, "default tab should be Tutorial")
+test("default tab is All Exercises", function()
+    assert_eq(lab.menu.mode, lab.MENU_ALL_EXERCISES, "default tab should be All Exercises")
 end)
 
 -- ============================================================================

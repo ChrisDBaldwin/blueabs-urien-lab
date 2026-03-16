@@ -1102,24 +1102,6 @@ local function select_exercise(index)
 end
 
 local function select_tutorial_lesson(lesson, opponent_name)
-    -- Auto-load the correct opponent if needed
-    if opponent_name and not TESTING then
-        local need_load = (not selected_opponent) or (selected_opponent.name ~= opponent_name)
-        if need_load then
-            for ci, char in ipairs(CHARACTERS) do
-                if char.name == opponent_name then
-                    if char_states[char.id] and char_states[char.id].saved then
-                        load_char_state(ci)
-                        print("[Urien Lab] Tutorial: loaded vs " .. opponent_name)
-                    else
-                        print("[Urien Lab] Tutorial: need vs " .. opponent_name .. " save state")
-                        print("[Urien Lab] Go to character select (Alt+1) and save a state vs " .. opponent_name)
-                    end
-                    break
-                end
-            end
-        end
-    end
 
     engine.current_exercise_index = nil
     engine.current_exercise = lesson
@@ -1890,7 +1872,7 @@ end
 -- ============================================================================
 
 -- Menu modes
-local MENU_TUTORIAL = 0       -- Tutorial tab
+-- Exercise menu tabs
 local MENU_ALL_EXERCISES = 1   -- All exercises (unfiltered)
 local MENU_CHAR_EXERCISES = 2  -- Character-filtered exercises
 local MENU_OPPONENT = 3
@@ -1899,14 +1881,19 @@ local menu = {
     show = false,
     cursor_all = 1,        -- cursor for All tab
     cursor_char = 1,       -- cursor for Character tab
-    mode = MENU_TUTORIAL,  -- default to Tutorial tab
+    mode = MENU_ALL_EXERCISES,
     matchup_cursor = 1,
     naming_slot = nil,     -- set to slot number when naming a matchup
     naming_buffer = "",
     debug = false,
     delete_id = nil,       -- exercise ID pending delete confirmation
     sort_mode = "category",
-    tutorial_cursor = 1,       -- flat cursor position in tutorial display list
+}
+
+-- Tutorial is its own mode, separate from the exercise menu
+local tutorial = {
+    show = false,
+    cursor = 1,            -- flat cursor position in chapter/lesson list
 }
 
 -- Sort modes for exercise list (cycled with HP)
@@ -2713,7 +2700,21 @@ local function draw_opponent_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
 end
 
 --- Draw the tutorial tab in the menu
-local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
+local function draw_tutorial()
+    if not tutorial.show then return end
+
+    local menu_x = 20
+    local menu_y = 50
+    local menu_w = SCREEN_W - 40
+    local row_h = 12
+    local visible_rows = 9
+    local menu_h = visible_rows * row_h + 30
+
+    draw_gradient_box(menu_x, menu_y, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
+
+    -- Title
+    draw_text(menu_x + 4, menu_y + 2, "TUTORIAL", COLOR.text_cyan)
+
     -- Build flat display list (always expanded)
     local display = {}
     for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
@@ -2728,8 +2729,8 @@ local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
 
     -- Scrolling
     local start_row = 1
-    if menu.tutorial_cursor > content_rows then
-        start_row = menu.tutorial_cursor - content_rows + 1
+    if tutorial.cursor > content_rows then
+        start_row = tutorial.cursor - content_rows + 1
     end
 
     local drawn = 0
@@ -2740,7 +2741,7 @@ local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
         local row_y = content_y_start + drawn * row_h
 
         if item.type == "chapter" then
-            local is_selected = (di == menu.tutorial_cursor)
+            local is_selected = (di == tutorial.cursor)
             local chapter = item.chapter
             -- Count completion
             local completed = 0
@@ -2759,7 +2760,7 @@ local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
             draw_text(menu_x + 4, row_y, chapter.name:upper(), chapter_color)
             draw_text(menu_x + menu_w - 40, row_y, completed .. "/" .. total, COLOR.text_gray)
         else
-            local is_selected = (di == menu.tutorial_cursor)
+            local is_selected = (di == tutorial.cursor)
             local lesson = item.lesson
             local prog = progression[lesson.id]
 
@@ -2816,7 +2817,7 @@ local function draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
             draw_text(menu_x + menu_w - 160, desc_y, "vs " .. opp, opp_color)
         end
     end
-    draw_text(hints_x, desc_y, "LP=Select", COLOR.text_yellow)
+    draw_text(hints_x, desc_y, "LP=Select  L/R=Trials", COLOR.text_yellow)
 end
 
 local function draw_menu()
@@ -2832,30 +2833,30 @@ local function draw_menu()
 
     draw_gradient_box(menu_x, menu_y, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
 
-    -- Tab bar
-    local tab_tut_color = (menu.mode == MENU_TUTORIAL) and COLOR.text_yellow or COLOR.text_gray
+    -- Tab bar (Tutorial is reachable via L/R but drawn as a separate mode)
     local tab_all_color = (menu.mode == MENU_ALL_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
     local char_label = selected_opponent and ("vs " .. selected_opponent.name) or "Character"
     local tab_char_color = (menu.mode == MENU_CHAR_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
     local tab_opp_color = (menu.mode == MENU_OPPONENT) and COLOR.text_yellow or COLOR.text_gray
-    local tut_label = "[Tutorial]"
+    local tut_label = "<Tutorial"
     local all_label = "[All]"
     local char_label_full = "[" .. char_label .. "]"
     local opp_label = "[Opponent]"
+    local tut_end_label = "Tutorial>"
     local tab_cw = 4
     local tab_gap = 4
     local x_tut = menu_x + 4
     local x_all = x_tut + #tut_label * tab_cw + tab_gap
     local x_char = x_all + #all_label * tab_cw + tab_gap
     local x_opp = x_char + #char_label_full * tab_cw + tab_gap
-    draw_text(x_tut, menu_y + 2, tut_label, tab_tut_color)
+    local x_tut_end = x_opp + #opp_label * tab_cw + tab_gap
+    draw_text(x_tut, menu_y + 2, tut_label, COLOR.text_gray)
     draw_text(x_all, menu_y + 2, all_label, tab_all_color)
     draw_text(x_char, menu_y + 2, char_label_full, tab_char_color)
     draw_text(x_opp, menu_y + 2, opp_label, tab_opp_color)
+    draw_text(x_tut_end, menu_y + 2, tut_end_label, COLOR.text_gray)
 
-    if menu.mode == MENU_TUTORIAL then
-        draw_tutorial_tab(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
-    elseif menu.mode == MENU_ALL_EXERCISES then
+    if menu.mode == MENU_ALL_EXERCISES then
         draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h,
             all_exercises_sorted, menu.cursor_all, true)
     elseif menu.mode == MENU_CHAR_EXERCISES then
@@ -4012,8 +4013,8 @@ local function handle_charselect_input()
             app_state = APP_TRAINING
             engine.state = STATE_IDLE
             -- Apply queued menu selection from Coin hub
-            if main_menu.pending_choice == 2 and #TUTORIAL_CHAPTERS > 0 then
-                start_tutorial_chapter(1)
+            if main_menu.pending_choice == 2 then
+                tutorial.show = true
             end
             main_menu.pending_choice = nil
         end
@@ -4073,25 +4074,94 @@ local function handle_category_selector_input()
     end
 end
 
+--- Handle tutorial navigation input
+local function handle_tutorial_input()
+    if not tutorial.show then return end
+
+    -- Build flat display list (always expanded)
+    local display = {}
+    for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
+        table.insert(display, { type = "chapter", chapter_idx = ci })
+        for li, lesson in ipairs(chapter.lessons) do
+            table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
+        end
+    end
+
+    if is_pressed("P1 Up") then
+        tutorial.cursor = tutorial.cursor - 1
+        if tutorial.cursor < 1 then tutorial.cursor = #display end
+    elseif is_pressed("P1 Down") then
+        tutorial.cursor = tutorial.cursor + 1
+        if tutorial.cursor > #display then tutorial.cursor = 1 end
+    elseif is_pressed("P1 Weak Punch") then
+        local item = display[tutorial.cursor]
+        if item then
+            if item.type == "chapter" then
+                start_tutorial_chapter(item.chapter_idx)
+                tutorial.show = false
+            elseif item.type == "lesson" then
+                local chapter = TUTORIAL_CHAPTERS[item.chapter_idx]
+                engine.tutorial_chapter_idx = item.chapter_idx
+                engine.tutorial_lesson_idx = item.lesson_idx
+                select_tutorial_lesson(item.lesson, chapter and chapter.opponent)
+                tutorial.show = false
+            end
+        end
+    elseif is_pressed("P1 Coin") then
+        tutorial.show = false
+    elseif is_pressed("P1 Left") or is_pressed("P1 Right") then
+        -- Switch to exercise menu
+        tutorial.show = false
+        engine.tutorial_chapter_idx = nil
+        engine.tutorial_lesson_idx = nil
+        menu.show = true
+    end
+
+    -- Clamp cursor
+    local total = 0
+    for _, chapter in ipairs(TUTORIAL_CHAPTERS) do
+        total = total + 1 + #chapter.lessons
+    end
+    if tutorial.cursor > total then
+        tutorial.cursor = math.max(1, total)
+    end
+end
+
 --- Handle menu navigation input
 local function handle_menu_input()
     if not menu.show then return end
 
-    -- Tab switching: Left/Right cycles Tutorial → All → Character → Opponent → Tutorial
-    local tab_order = { MENU_TUTORIAL, MENU_ALL_EXERCISES, MENU_CHAR_EXERCISES, MENU_OPPONENT }
+    -- Tab switching: Left/Right cycles [Tutorial] ← All → Character → Opponent → [Tutorial]
+    local tab_order = { MENU_ALL_EXERCISES, MENU_CHAR_EXERCISES, MENU_OPPONENT }
     if is_pressed("P1 Right") then
+        local found = false
         for i, t in ipairs(tab_order) do
             if menu.mode == t then
-                menu.mode = tab_order[(i % #tab_order) + 1]
+                if i == #tab_order then
+                    -- Last tab → switch to tutorial
+                    menu.show = false
+                    tutorial.show = true
+                else
+                    menu.mode = tab_order[i + 1]
+                end
+                found = true
                 break
             end
         end
         menu.delete_id = nil
         return
     elseif is_pressed("P1 Left") then
+        local found = false
         for i, t in ipairs(tab_order) do
             if menu.mode == t then
-                menu.mode = tab_order[((i - 2) % #tab_order) + 1]
+                if i == 1 then
+                    -- First tab → switch to tutorial
+                    menu.show = false
+                    tutorial.show = true
+                else
+                    menu.mode = tab_order[i - 1]
+                end
+                found = true
                 break
             end
         end
@@ -4099,57 +4169,7 @@ local function handle_menu_input()
         return
     end
 
-    if menu.mode == MENU_TUTORIAL then
-        -- Build flat display list (always expanded)
-        local display = {}
-        for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
-            table.insert(display, { type = "chapter", chapter_idx = ci })
-            for li, lesson in ipairs(chapter.lessons) do
-                table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
-            end
-        end
-
-        if is_pressed("P1 Up") then
-            menu.tutorial_cursor = menu.tutorial_cursor - 1
-            if menu.tutorial_cursor < 1 then menu.tutorial_cursor = #display end
-        elseif is_pressed("P1 Down") then
-            menu.tutorial_cursor = menu.tutorial_cursor + 1
-            if menu.tutorial_cursor > #display then menu.tutorial_cursor = 1 end
-        elseif is_pressed("P1 Weak Punch") then
-            local item = display[menu.tutorial_cursor]
-            if item then
-                if item.type == "chapter" then
-                    start_tutorial_chapter(item.chapter_idx)
-                    menu.show = false
-                elseif item.type == "lesson" then
-                    local chapter = TUTORIAL_CHAPTERS[item.chapter_idx]
-                    engine.tutorial_chapter_idx = item.chapter_idx
-                    engine.tutorial_lesson_idx = item.lesson_idx
-                    select_tutorial_lesson(item.lesson, chapter and chapter.opponent)
-                    menu.show = false
-                end
-            end
-        elseif is_pressed("P1 Medium Punch") then
-            if engine.state ~= STATE_IDLE then
-                engine.state = STATE_IDLE
-                engine.current_exercise = nil
-                engine.tutorial_chapter_idx = nil
-                engine.tutorial_lesson_idx = nil
-            else
-                menu.show = false
-            end
-        end
-
-        -- Clamp cursor: all chapters + all lessons (always expanded)
-        local new_display_count = 0
-        for _, chapter in ipairs(TUTORIAL_CHAPTERS) do
-            new_display_count = new_display_count + 1 + #chapter.lessons
-        end
-        if menu.tutorial_cursor > new_display_count then
-            menu.tutorial_cursor = math.max(1, new_display_count)
-        end
-
-    elseif menu.mode == MENU_ALL_EXERCISES or menu.mode == MENU_CHAR_EXERCISES then
+    if menu.mode == MENU_ALL_EXERCISES or menu.mode == MENU_CHAR_EXERCISES then
         -- Determine active list and cursor based on tab
         local ex_list, cur
         if menu.mode == MENU_ALL_EXERCISES then
@@ -4320,7 +4340,7 @@ local function handle_main_menu_input()
             app_state = APP_CHARSELECT
             charselect_visible = true
         elseif choice == 2 then
-            -- Tutorial: start chapter 1 immediately
+            -- Tutorial: open the tutorial browser
             if not game_state.playing then
                 main_menu.pending_choice = choice
             else
@@ -4328,9 +4348,8 @@ local function handle_main_menu_input()
                     app_state = APP_TRAINING
                     charselect_visible = false
                 end
-                if #TUTORIAL_CHAPTERS > 0 then
-                    start_tutorial_chapter(1)
-                end
+                tutorial.show = true
+                menu.show = false
             end
         end
     end
@@ -4343,10 +4362,20 @@ local function handle_input()
         return
     end
 
-    -- Coin = Toggle exercise menu (in training, go straight to exercises)
+    -- Tutorial mode blocks all other input
+    if tutorial.show then
+        handle_tutorial_input()
+        return
+    end
+
+    -- Coin = Toggle menu (tutorial browser if in tutorial, exercise menu otherwise)
     if is_pressed("P1 Coin") then
-        menu.show = not menu.show
-        if menu.show and engine.state == STATE_ACTIVE then
+        if engine.tutorial_chapter_idx then
+            tutorial.show = not tutorial.show
+        else
+            menu.show = not menu.show
+        end
+        if (menu.show or tutorial.show) and engine.state == STATE_ACTIVE then
             engine.state = STATE_SETUP
             engine.setup_timer = SETUP_DELAY_FRAMES
         end
@@ -4403,8 +4432,8 @@ local function update_charselect_sequence()
             rebuild_filtered_exercises()
             memory.writebyte(MEM.round_timer, 100)
             -- Apply queued menu selection from Coin hub
-            if main_menu.pending_choice == 2 and #TUTORIAL_CHAPTERS > 0 then
-                start_tutorial_chapter(1)
+            if main_menu.pending_choice == 2 then
+                tutorial.show = true
             end
             main_menu.pending_choice = nil
             print("[Urien Lab] Match started -- training mode active")
@@ -4576,7 +4605,7 @@ local function on_gui()
         -- Freeze/unfreeze game logic during menu/popup states.
         -- After menu closes, stay frozen until all buttons are released
         -- so the closing press doesn't pass through to the game.
-        local menu_active = main_menu.show or menu.show or cat_sel.active
+        local menu_active = main_menu.show or menu.show or tutorial.show or cat_sel.active
         if menu_active then
             menu.was_frozen = true
         end
@@ -4679,6 +4708,7 @@ local function on_gui()
     draw_result_banner()
     draw_setup_overlay()
     draw_menu()
+    draw_tutorial()
     draw_main_menu()
     draw_debug()
 
@@ -4743,7 +4773,6 @@ if TESTING then
         STATE_ACTIVE = STATE_ACTIVE,
         STATE_SUCCESS = STATE_SUCCESS,
         STATE_FAIL = STATE_FAIL,
-        MENU_TUTORIAL = MENU_TUTORIAL,
         MENU_ALL_EXERCISES = MENU_ALL_EXERCISES,
         MENU_CHAR_EXERCISES = MENU_CHAR_EXERCISES,
         MENU_OPPONENT = MENU_OPPONENT,
