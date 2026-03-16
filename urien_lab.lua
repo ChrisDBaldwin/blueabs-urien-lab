@@ -1915,16 +1915,14 @@ local SORT_LABELS = { category = "Category", difficulty = "Diff", name = "Name" 
 
 -- Main menu (Coin button hub)
 local MAIN_MENU_ITEMS = {
-    { label = "Tutorial",        desc = "Learn Urien step by step" },
-    { label = "Combo Trials",    desc = "Practice combos and links" },
-    { label = "Free Training",   desc = "Open practice with dummy" },
-    { label = "Record Combo",    desc = "Capture your own combos" },
-    { label = "Change Opponent", desc = "Pick a different matchup" },
+    { label = "Trials",    desc = "Pick an opponent and practice combos" },
+    { label = "Tutorial",  desc = "Learn Urien step by step" },
 }
 local main_menu = {
     show = false,
     cursor = 1,
     was_frozen = false,
+    pending_choice = nil,  -- queued selection when no match is running yet
 }
 
 --- Rebuild both exercise index lists (all + character-filtered)
@@ -2893,7 +2891,6 @@ local function draw_main_menu()
         local y = list_y + (i - 1) * row_h
         local is_sel = (i == main_menu.cursor)
         local label_color = is_sel and COLOR.text_yellow or COLOR.text_white
-        local desc_color = is_sel and COLOR.text_gray or COLOR.transparent
 
         -- Cursor indicator
         if is_sel then
@@ -4014,6 +4011,11 @@ local function handle_charselect_input()
         if load_char_state(char_cursor) then
             app_state = APP_TRAINING
             engine.state = STATE_IDLE
+            -- Apply queued menu selection from Coin hub
+            if main_menu.pending_choice == 2 and #TUTORIAL_CHAPTERS > 0 then
+                start_tutorial_chapter(1)
+            end
+            main_menu.pending_choice = nil
         end
     elseif is_pressed("P1 Strong Punch") then
         -- Save current game state for this character
@@ -4312,46 +4314,24 @@ local function handle_main_menu_input()
         local choice = main_menu.cursor
         main_menu.show = false
 
-        -- Choices 1-4 need a match running; enter training if possible
-        if choice >= 1 and choice <= 4 then
-            if app_state == APP_CHARSELECT and game_state.playing then
-                app_state = APP_TRAINING
-                charselect_visible = false
-            end
-        end
-
         if choice == 1 then
-            -- Tutorial
-            menu.show = true
-            menu.mode = MENU_TUTORIAL
-            if engine.state == STATE_ACTIVE then
-                engine.state = STATE_SETUP
-                engine.setup_timer = SETUP_DELAY_FRAMES
-            end
-        elseif choice == 2 then
-            -- Combo Trials
-            menu.show = true
-            menu.mode = MENU_ALL_EXERCISES
-            if engine.state == STATE_ACTIVE then
-                engine.state = STATE_SETUP
-                engine.setup_timer = SETUP_DELAY_FRAMES
-            end
-        elseif choice == 3 then
-            -- Free Training
-            menu.show = false
-            engine.state = STATE_IDLE
-            engine.current_exercise = nil
-            engine.current_exercise_index = nil
-            engine.tutorial_chapter_idx = nil
-            engine.tutorial_lesson_idx = nil
-        elseif choice == 4 then
-            -- Record Combo
-            capture_toggle()
-        elseif choice == 5 then
-            -- Change Opponent
+            -- Trials: open character select to pick opponent
             menu.show = false
             app_state = APP_CHARSELECT
             charselect_visible = true
+        elseif choice == 2 then
+            -- Tutorial: start chapter 1 immediately
+            if not game_state.playing then
+                main_menu.pending_choice = choice
+            else
+                if app_state == APP_CHARSELECT then
+                    app_state = APP_TRAINING
+                    charselect_visible = false
+                end
+                if #TUTORIAL_CHAPTERS > 0 then
+                    start_tutorial_chapter(1)
+                end
+            end
         end
     end
 end
@@ -4363,28 +4343,16 @@ local function handle_input()
         return
     end
 
-    -- Coin = Toggle main menu
+    -- Coin = Toggle exercise menu (in training, go straight to exercises)
     if is_pressed("P1 Coin") then
-        if main_menu.show then
-            main_menu.show = false
-        else
-            main_menu.show = true
-            menu.show = false  -- close exercise menu if open
-            if engine.state == STATE_ACTIVE then
-                engine.state = STATE_SETUP
-                engine.setup_timer = SETUP_DELAY_FRAMES
-            end
+        menu.show = not menu.show
+        if menu.show and engine.state == STATE_ACTIVE then
+            engine.state = STATE_SETUP
+            engine.setup_timer = SETUP_DELAY_FRAMES
         end
     end
 
-    -- Main menu blocks all other input while active
-    if main_menu.show then
-        handle_main_menu_input()
-        return
-    end
-
     if menu.show then
-        -- Start closes exercise menu
         if is_pressed("P1 Start") then
             menu.show = false
         else
@@ -4434,6 +4402,11 @@ local function update_charselect_sequence()
             selected_opponent = nil
             rebuild_filtered_exercises()
             memory.writebyte(MEM.round_timer, 100)
+            -- Apply queued menu selection from Coin hub
+            if main_menu.pending_choice == 2 and #TUTORIAL_CHAPTERS > 0 then
+                start_tutorial_chapter(1)
+            end
+            main_menu.pending_choice = nil
             print("[Urien Lab] Match started -- training mode active")
         end
     end
@@ -4590,6 +4563,9 @@ local function on_gui()
             draw_text(4, 14, "Coin = Menu", COLOR.text_gray)
         end
         draw_main_menu()
+        if main_menu.pending_choice and not main_menu.show then
+            draw_text(4, SCREEN_H - 10, "Tutorial queued", COLOR.text_yellow)
+        end
         return
     elseif charselect_seq == 4 then  -- transitioning
         draw_text(4, 4, "Loading match...", COLOR.text_cyan)
@@ -4684,6 +4660,9 @@ local function on_gui()
             draw_text(4, 4, "URIEN LAB -- Press Start for menu", COLOR.text_cyan)
         end
         draw_main_menu()
+        if main_menu.pending_choice and not main_menu.show then
+            draw_text(4, SCREEN_H - 10, "Tutorial queued", COLOR.text_yellow)
+        end
         return
     end
 
