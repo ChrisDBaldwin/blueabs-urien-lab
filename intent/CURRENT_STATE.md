@@ -4,7 +4,7 @@
 
 1. Script loads → loads `character_select.fs` (downloads from voidtalker.com if missing) → game's native character select screen
 2. Player picks P1 and P2 characters, both lock in → fast-forwards to match start
-3. In training mode, press Start to open exercise menu, select a combo to practice
+3. In training mode, press Coin to open main menu, pick Tutorial or Combo Trials to practice
 4. Alt+1 returns to character select at any time
 
 ## What Works
@@ -15,7 +15,8 @@
 - Charge meters for horizontal and vertical charge with decay timers (labels follow notation mode)
 - Per-opponent save states with visual character select grid
 - Game character select integration (native char select screen with timer freeze and fast-forward)
-- Three-tab menu (All / Character / Opponent), dual notation, live combo tracker
+- Four-tab exercise menu (Tutorial / All / Character / Opponent), dual notation, live combo tracker
+- Main menu hub (Coin): Tutorial, Combo Trials, Free Training, Record Combo, Change Opponent
 - Opponent tagging, exercise side toggle (L/R), timing feedback on cancel windows (color-coded: green/yellow/orange)
 - Exercise deletion from menu, editable exercise files with hot-reload (Alt+9)
 - Manifest-based content sync from voidtalker.com (`manifest.txt` checked on boot for script version, exercise version, and available save states)
@@ -70,15 +71,18 @@ These are regression-critical behaviors. Violating any of these will silently br
 | Input | Action |
 |-------|--------|
 | D-Pad | Navigate character grid |
+| Start | Toggle overlay (hide to play, show to save/load) |
 | Jab (P1 Weak Punch) | Load saved state for selected opponent |
 | Fierce (P1 Strong Punch) | Save current game state for selected opponent |
+| Coin | Open main menu |
 
 ### Training Mode
 
 | Input | Action |
 |-------|--------|
-| Start | Open/close exercise menu |
-| Left/Right | Switch menu tabs (All / Character / Opponent) |
+| Coin | Open/close main menu (Tutorial, Combos, Record, Change Opponent) |
+| Start | Toggle recording (closes exercise menu if open) |
+| Left/Right | Switch menu tabs (Tutorial / All / Character / Opponent) |
 | Up/Down | Navigate exercises |
 | Jab (P1 Weak Punch) | Select exercise (Opponent tab: return to character select) |
 | Strong (P1 Medium Punch) | Stop exercise / Close menu |
@@ -86,7 +90,6 @@ These are regression-critical behaviors. Violating any of these will silently br
 | Roundhouse (P1 Strong Kick) | Delete exercise (press twice to confirm) |
 | Weak Kick | Toggle exercise side (L/R) |
 | Medium Kick | Tag/untag current opponent on highlighted exercise |
-| Coin | Toggle record-to-exercise capture |
 
 The menu displays a button guide at the bottom: **MP=Stop, HP=Sort, LK=Side, MK=Tag, HK=Del**.
 
@@ -98,7 +101,7 @@ The menu displays a button guide at the bottom: **MP=Stop, HP=Sort, LK=Side, MK=
 | Alt+2 | Toggle numpad notation |
 | Alt+3 | Reset current exercise progress |
 | Alt+4 | Toggle debug display |
-| Alt+5 | Toggle menu (reliable backup for Start) |
+| Alt+5 | Toggle exercise menu directly |
 | Alt+6 | Quick save matchup to current slot (legacy) |
 | Alt+7 | Show current matchup slot name (legacy) |
 | Alt+9 | Reload exercises (after editing file) |
@@ -109,9 +112,9 @@ Konami code (Up Up Down Down Left Right Left Right Weak Kick Weak Punch Start on
 
 ## Record-to-Exercise Flow
 
-1. Press **Coin** during a match to start recording (pauses any active exercise)
+1. Press **Start** during a match to start recording (pauses any active exercise)
 2. Perform a combo — the capture system records hits and joypad inputs each frame
-3. Press **Coin** again to stop — the system automatically builds a playable exercise:
+3. Press **Start** again to stop — the system automatically builds a playable exercise:
    - Known moves identified via `lookup_move_name()` against the MOVES database
    - Unknown moves get notation inferred from joypad edge detection (`detect_motion` + `detect_button`)
    - Multi-hit moves collapsed into a single sequence step

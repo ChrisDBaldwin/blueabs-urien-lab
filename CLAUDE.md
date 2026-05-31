@@ -29,7 +29,7 @@ Organized into numbered sections:
 | [2] Memory Address Map | CPS3 RAM addresses (game phase, P1/P2 base, charge, meter, combos) |
 | [2b] Character Roster | 19 SF3:3S characters (alphabetical, no Gill), grid layout constants, app state vars |
 | [3] Urien Move Database | Urien moves with action IDs, dual notation (SF + Numpad) |
-| [4] Exercise Definitions | Exercises loaded from file with sequences, setup requirements, success/fail criteria, hints |
+| [4] Exercise Definitions | Exercises loaded from file with sequences, setup requirements, success/fail criteria, hints. [4b] Tutorial chapters/lessons loaded from `urien_lab_tutorial.txt` |
 | [5] Progression State | Save/load to `urien_lab_save.txt`, mastery tracking (3 completions) |
 | [6] Utility Functions | Memory reads (little-endian), action string builders, action ID normalization |
 | [7] Game State Reader | Per-frame polling of positions, actions, combo counter, hit region, meter |
@@ -120,11 +120,35 @@ HINT:d+HP -> b~f+LK
 
 All fields after ID and NAME are optional on parse (backward compatible).
 
+### Tutorial File Format
+`---` delimited blocks in `urien_lab_tutorial.txt`. A block with `CHAPTER:` starts a new chapter; subsequent blocks are lessons belonging to that chapter.
+```
+---
+CHAPTER:Normals
+OPPONENT:Urien
+DESC:Every combo starts with a button.
+---
+ID:tut_1_01
+NAME:st.LP
+TYPE:hit
+SEQ:st.LP,H,A00000000;A00010001
+SUCCESS:1
+DESC:Fastest button. Use it to interrupt pressure.
+HINT:Press Light Punch while standing.
+DIFFICULTY:1
+---
+```
+
+**Chapter fields:** `CHAPTER` (name, required), `OPPONENT` (character name, required), `DESC` (description).
+
+**Lesson fields:** `ID` (required), `NAME` (required), `TYPE` (required: `hit`/`block`/`action`/`block_punish`/`combo`), `SEQ` (required, same pipe/semicolon format as exercises), `SETUP` (optional, same 9-field hex format, default `0100,0180,A0,A0,full,0,0,stand,0`), `SUCCESS` (min_combo value), `DESC`, `HINT`, `DIFFICULTY` (1-5, default 1), `BLOCK_MATCH` (guard prefix/ID), `DUMMY_ATTACK` (`button,delay,interval[,crouch]`), `PUNISH_IDS` (semicolon-separated action IDs), `RESETOK` (`1`/`0`).
+
 ## Data Files
 
 | File | Tracked | Purpose |
 |------|---------|---------|
 | `urien_lab.lua` | Yes | Main script |
+| `urien_lab_tutorial.txt` | Yes | Shipped tutorial chapter/lesson definitions |
 | `urien_lab_exercises.txt` | Yes | Shipped exercise definitions (updated automatically) |
 | `urien_lab_custom.txt` | No | User's captured/custom exercises (never overwritten by updates) |
 | `CLAUDE.md` | Yes | Dev guidance (this file) |

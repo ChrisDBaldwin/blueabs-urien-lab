@@ -7,8 +7,8 @@
 -- Flow:
 --   1. Script loads -> game's native character select screen (if character_select.fs exists)
 --   2. Pick P1 and P2 characters, both lock in -> fast-forwards to match
---   3. In training mode, press Start to open exercise menu
---   4. Select a combo to practice
+--   3. In training mode, press Coin to open main menu, pick Tutorial or Combo Trials
+--   4. Select an exercise to practice, or press Start to record your own
 --   Alt+1 = Return to character select at any time
 --
 -- Character Select Controls:
@@ -17,14 +17,14 @@
 --   Fierce (P1 Strong Punch) = Save current game state for opponent
 --
 -- Training Controls:
---   Start        = Open/close exercise menu
+--   Start        = Toggle exercise capture mode (closes menu if open)
+--   Coin         = Open main menu (Tutorial, Combos, Record, etc.)
 --   Left/Right   = Switch menu tabs (Exercises / Opponent)
 --   Up/Down      = Navigate exercises
 --   Jab (P1 Weak Punch)      = Select exercise
 --   Strong (P1 Medium Punch)  = Stop exercise (in menu) / Close menu
 --   LK (P1 Weak Kick)         = Toggle exercise side (L/R)
---   MK (P1 Medium Kick)       = Tag/untag opponent on exercise
---   Coin         = Toggle exercise capture mode
+--   MK (P1 Medium Kick)       = Preview recorded combo
 --   Alt+2        = Toggle numpad notation
 --   Alt+3        = Reset current exercise progress
 --   Alt+5        = Toggle menu (reliable backup for Start)
@@ -34,7 +34,7 @@
 -- [1] CONSTANTS & CONFIG
 -- ============================================================================
 
-local SCRIPT_VERSION = "0.6.2"
+local SCRIPT_VERSION = "0.6.3"
 local SAVE_FILE = "urien_lab_save.txt"
 local CAPTURE_FILE = "captured_exercises.txt"
 local MATCHUP_FILE = "urien_lab_matchups.txt"
@@ -57,6 +57,11 @@ local METER_REFILL_DELAY_FRAMES = 90 -- Frames of no input before meter starts f
 
 -- Mastery
 local MASTERY_THRESHOLD = 3          -- Completions needed to master an exercise
+local TUTORIAL_MASTERY_THRESHOLD = 1 -- Tutorial lessons only need 1 completion
+
+local function get_mastery_threshold(ex)
+    return ex and ex.tutorial_type and TUTORIAL_MASTERY_THRESHOLD or MASTERY_THRESHOLD
+end
 
 -- Matchup save state slots
 local MAX_MATCHUP_SLOTS = 5
@@ -75,6 +80,7 @@ local CHARSELECT_SAVE = "character_select.fs"
 -- Exercises (record-to-exercise)
 local EXERCISE_FILE = "urien_lab_exercises.txt"
 local CUSTOM_EXERCISE_FILE = "urien_lab_custom.txt"
+local TUTORIAL_FILE = "urien_lab_tutorial.txt"
 local exercise_counter = 0
 
 -- Save state distribution
@@ -489,6 +495,15 @@ local exercises = {}
 -- Exercises populated via record-to-exercise (Coin) and loaded from urien_lab_exercises.txt
 
 -- ============================================================================
+-- [4b] TUTORIAL DATA
+-- ============================================================================
+-- Tutorial content loaded from urien_lab_tutorial.txt at startup.
+-- Each chapter has lessons that are playable exercises using the existing engine,
+-- extended with tutorial_type for block/action detection.
+
+local TUTORIAL_CHAPTERS = {}
+
+-- ============================================================================
 -- [5] PROGRESSION STATE
 -- ============================================================================
 
@@ -517,6 +532,18 @@ local function init_progression()
                 attempts = 0,
                 mastered = false,
             }
+        end
+    end
+    -- Register tutorial lesson IDs
+    for _, chapter in ipairs(TUTORIAL_CHAPTERS) do
+        for _, lesson in ipairs(chapter.lessons) do
+            if not progression[lesson.id] then
+                progression[lesson.id] = {
+                    completions = 0,
+                    attempts = 0,
+                    mastered = false,
+                }
+            end
         end
     end
 end
@@ -791,6 +818,9 @@ end
 -- Forward declaration (reset_stun defined later, but needed by freeze_game)
 local reset_stun
 
+-- Forward declaration (load_char_state defined in [11a2], needed by select_tutorial_lesson)
+local load_char_state
+
 -- Forward declarations (input state defined in [12], but needed by swap_inputs)
 local input_current = {}
 local input_prev = {}
@@ -970,6 +1000,21 @@ local engine = {
     -- Stats for current session
     session_attempts = 0,
     session_completions = 0,
+
+    -- Tutorial sequential playthrough
+    tutorial_chapter_idx = nil,   -- which chapter is being played (nil = not in tutorial sequence)
+    tutorial_lesson_idx = nil,    -- current lesson position within that chapter
+
+    -- Preview/demo playback state
+    demo = {
+        recordings = {},    -- [exercise_id] = { duration=N, deltas={{frame,mask},...} }
+        active = false,
+        recording = nil,
+        frame = 0,
+        delta_idx = 1,
+        current_mask = 0,
+        duration = 0,
+    },
 }
 
 -- Combo tracker: live display of moves as they land (independent of exercise engine)
@@ -1038,6 +1083,8 @@ local SPHERE_TO_AEGIS = {
 
 local function select_exercise(index)
     index = clamp(index, 1, #exercises)
+    engine.tutorial_chapter_idx = nil
+    engine.tutorial_lesson_idx = nil
     engine.current_exercise_index = index
     engine.current_exercise = exercises[index]
     engine.state = STATE_SETUP
@@ -1062,6 +1109,43 @@ local function select_exercise(index)
     engine.fail_last_action = ""
     engine.session_attempts = 0
     engine.session_completions = 0
+    engine.block_detected = false
+end
+
+local function select_tutorial_lesson(lesson, opponent_name)
+
+    engine.current_exercise_index = nil
+    engine.current_exercise = lesson
+    engine.state = STATE_SETUP
+    engine.combo_index = 1
+    engine.setup_timer = SETUP_DELAY_FRAMES
+    engine.attempt_started = false
+    engine.fail_reason = ""
+    engine.last_hit_waza = ""
+    engine.projectile_hit_id = nil
+    engine.step_frames = {}
+    engine.active_start_frame = 0
+    engine.last_hit_frame = 0
+    engine.last_match_action = ""
+    engine.action_changed_since_match = true
+    engine.next_expects_same_action = false
+    engine.new_input_since_match = false
+    engine.last_match_buttons = {}
+    engine.fail_step_index = 0
+    engine.fail_type = ""
+    engine.fail_gap = 0
+    engine.fail_ref_gap = 0
+    engine.fail_last_action = ""
+    engine.session_attempts = 0
+    engine.session_completions = 0
+    engine.block_detected = false
+end
+
+local function start_tutorial_chapter(chapter_idx)
+    local chapter = TUTORIAL_CHAPTERS[chapter_idx]
+    engine.tutorial_chapter_idx = chapter_idx
+    engine.tutorial_lesson_idx = 1
+    select_tutorial_lesson(chapter.lessons[1], chapter.opponent)
 end
 
 local function reset_exercise()
@@ -1086,6 +1170,7 @@ local function reset_exercise()
     engine.fail_gap = 0
     engine.fail_ref_gap = 0
     engine.fail_last_action = ""
+    engine.block_detected = false
 end
 
 local function engine_setup_update()
@@ -1119,6 +1204,128 @@ local function engine_active_update()
     -- Manage HP/stun/meter/charge with delayed recovery
     manage_resources(ex)
 
+    -- Tutorial type: block detection
+    -- Requires P1 to be in guard state (G-prefix) AND not losing life.
+    -- Just holding back without being attacked won't trigger — the dummy must
+    -- actually attack and P1 must be in blockstun with full HP.
+    if ex.tutorial_type == "block" then
+        local action = game_state.p1.action_string
+        local p1_life = game_state.p1.life
+        local full_hp = ex.setup.p1_life or LIFE_FULL
+        if ex.block_match and action:sub(1, #ex.block_match) == ex.block_match
+            and p1_life >= full_hp then
+            -- Require the dummy attack to have actually fired (frames elapsed past delay)
+            local frames_active = game_state.frame_count - engine.active_start_frame
+            local da = ex.dummy_attack
+            if da and frames_active >= da.delay then
+                engine.state = STATE_SUCCESS
+                engine.result_timer = SUCCESS_DISPLAY_FRAMES
+                engine.session_completions = engine.session_completions + 1
+                if not engine.attempt_started then
+                    engine.attempt_started = true
+                    engine.session_attempts = engine.session_attempts + 1
+                    local prog = progression[ex.id]
+                    if prog then prog.attempts = prog.attempts + 1 end
+                end
+                local prog = progression[ex.id]
+                if prog then
+                    prog.completions = prog.completions + 1
+                    local threshold = get_mastery_threshold(ex)
+                    if prog.completions >= threshold then
+                        prog.completions = threshold
+                        prog.mastered = true
+                    end
+                    save_progression()
+                end
+            end
+        end
+        return
+    end
+
+    -- Tutorial type: block then punish (two-phase)
+    if ex.tutorial_type == "block_punish" then
+        local action = game_state.p1.action_string
+        local p1_life = game_state.p1.life
+        local full_hp = ex.setup.p1_life or LIFE_FULL
+        -- Phase 1: detect block (guard state + HP intact + dummy has attacked)
+        if not engine.block_detected then
+            local frames_active = game_state.frame_count - engine.active_start_frame
+            local da = ex.dummy_attack
+            if ex.block_match and action:sub(1, #ex.block_match) == ex.block_match
+                and p1_life >= full_hp
+                and da and frames_active >= da.delay then
+                engine.block_detected = true
+            end
+        end
+        -- Phase 2: after blocking, detect the punish hit via combo counter
+        if engine.block_detected then
+            if game_state.combo_counter > game_state.combo_counter_prev and game_state.combo_counter > 0 then
+                local hit_waza = game_state.p1.action_string
+                local matched = false
+                if ex.punish_action_ids then
+                    for _, expected_id in ipairs(ex.punish_action_ids) do
+                        if hit_waza == expected_id then matched = true; break end
+                    end
+                else
+                    matched = true  -- any hit counts if no specific punish IDs
+                end
+                if matched then
+                    if not engine.attempt_started then
+                        engine.attempt_started = true
+                        engine.session_attempts = engine.session_attempts + 1
+                        local prog = progression[ex.id]
+                        if prog then prog.attempts = prog.attempts + 1 end
+                    end
+                    engine.state = STATE_SUCCESS
+                    engine.result_timer = SUCCESS_DISPLAY_FRAMES
+                    engine.session_completions = engine.session_completions + 1
+                    local prog = progression[ex.id]
+                    if prog then
+                        prog.completions = prog.completions + 1
+                        local threshold = get_mastery_threshold(ex)
+                        if prog.completions >= threshold then
+                            prog.completions = threshold
+                            prog.mastered = true
+                        end
+                        save_progression()
+                    end
+                end
+            end
+        end
+        return
+    end
+
+    -- Tutorial type: action detection (move performed, no hit required)
+    if ex.tutorial_type == "action" then
+        local action = game_state.p1.action_string
+        for _, expected_id in ipairs(seq[1].action_ids) do
+            if action == expected_id then
+                if not engine.attempt_started then
+                    engine.attempt_started = true
+                    engine.session_attempts = engine.session_attempts + 1
+                    local prog = progression[ex.id]
+                    if prog then prog.attempts = prog.attempts + 1 end
+                end
+                engine.state = STATE_SUCCESS
+                engine.result_timer = SUCCESS_DISPLAY_FRAMES
+                engine.session_completions = engine.session_completions + 1
+                local prog = progression[ex.id]
+                if prog then
+                    prog.completions = prog.completions + 1
+                    local threshold = get_mastery_threshold(ex)
+                    if prog.completions >= threshold then
+                        prog.completions = threshold
+                        prog.mastered = true
+                    end
+                    save_progression()
+                end
+                break
+            end
+        end
+        return
+    end
+
+    -- Tutorial type "hit" and "combo" fall through to standard engine logic below
 
     -- Current step we're looking for
     if engine.combo_index > #seq then
@@ -1128,22 +1335,23 @@ local function engine_active_update()
 
     local current_step = seq[engine.combo_index]
 
-    -- Check for combo drops: if combo counter was > 0 and resets to 0, and we haven't
-    -- finished the sequence, that's a drop (skip for multi-combo exercises like Aegis setups)
-    if not ex.allow_combo_reset and engine.combo_index > 1 and game_state.combo_counter == 0 and game_state.combo_counter_prev > 0 then
-        engine.state = STATE_FAIL
-        engine.result_timer = FAIL_DISPLAY_FRAMES
-
-        -- Structured fail diagnostics
-        engine.fail_step_index = engine.combo_index
-        engine.fail_type = "drop"
-        engine.fail_gap = game_state.frame_count - engine.last_hit_frame
-        engine.fail_ref_gap = (ex.ref_timing and ex.ref_timing[engine.combo_index]) or 0
-        engine.fail_last_action = lookup_move_name(game_state.p1.action_string) or game_state.p1.action_string
-
-        -- Backward-compat fail_reason
-        engine.fail_reason = "Combo dropped at: " .. current_step.name
-        return
+    -- Fail if no step progress for too long after sequence has started.
+    -- Timeout scales with ref_timing: 3x expected gap, min 60f, fallback 120f.
+    if engine.combo_index > 1 then
+        local last_progress = engine.last_hit_frame > 0 and engine.last_hit_frame or engine.active_start_frame
+        local ref = ex.ref_timing and ex.ref_timing[engine.combo_index]
+        local timeout = ref and math.max(ref * 3, 60) or 120
+        if game_state.frame_count - last_progress > timeout then
+            engine.state = STATE_FAIL
+            engine.result_timer = FAIL_DISPLAY_FRAMES
+            engine.fail_step_index = engine.combo_index
+            engine.fail_type = "drop"
+            engine.fail_gap = game_state.frame_count - last_progress
+            engine.fail_ref_gap = (ex.ref_timing and ex.ref_timing[engine.combo_index]) or 0
+            engine.fail_last_action = lookup_move_name(game_state.p1.action_string) or game_state.p1.action_string
+            engine.fail_reason = "Combo dropped at: " .. current_step.name
+            return
+        end
     end
 
     -- Check for projectile hits (F-type moves)
@@ -1161,12 +1369,10 @@ local function engine_active_update()
             end
         end
     else
-        -- Check for normal/special hits (H-type moves)
-        -- Track whether the action string has changed since the last matched
-        -- step.  Multi-hit normals (cr.HP = 2 hits) and multi-frame counter/
-        -- waza noise can cause spurious new_hit signals while the player is
-        -- still in the same move.  Requiring the action to change first
-        -- ensures each step corresponds to a genuinely new move input.
+        -- Check for normal/special moves (H-type) via input tracking.
+        -- Matches when P1's action changes to an expected move, regardless of
+        -- whether it hits.  Success criteria (min_combo) validates hits at the end.
+        -- This handles setup combos, resets, feints, and unblockable follow-throughs.
         if game_state.p1.action_string ~= engine.last_match_action then
             engine.action_changed_since_match = true
         end
@@ -1186,12 +1392,7 @@ local function engine_active_update()
             end
         end
 
-        local new_hit = false
-        if game_state.combo_counter > game_state.combo_counter_prev and game_state.combo_counter > 0 then
-            new_hit = true
-        end
-
-        if new_hit and (engine.action_changed_since_match or (engine.next_expects_same_action and engine.new_input_since_match)) then
+        if engine.action_changed_since_match or (engine.next_expects_same_action and engine.new_input_since_match) then
             local hit_waza = game_state.p1.action_string
             engine.last_hit_waza = hit_waza
 
@@ -1237,8 +1438,9 @@ local function engine_active_update()
     -- Check if all steps completed
     if engine.combo_index > #seq then
         local min_combo = ex.success.min_combo
-        if min_combo and game_state.combo_counter < min_combo then
+        if min_combo and not ex.allow_combo_reset and game_state.combo_counter < min_combo then
             -- Combo dropped before completing — don't count as success
+            -- (skipped for multi-combo sequences where counter resets are expected)
             engine.combo_index = #seq
         else
             engine.state = STATE_SUCCESS
@@ -1253,7 +1455,9 @@ local function engine_active_update()
             local prog = progression[ex.id]
             if prog then
                 prog.completions = prog.completions + 1
-                if prog.completions >= MASTERY_THRESHOLD then
+                local threshold = get_mastery_threshold(ex)
+                if prog.completions >= threshold then
+                    prog.completions = threshold
                     prog.mastered = true
                 end
                 save_progression()
@@ -1267,8 +1471,24 @@ local function engine_result_update()
     if engine.result_timer <= 0 then
         if engine.state == STATE_FAIL then
             current_streak = 0
+            reset_exercise()  -- retry same lesson
+        elseif engine.state == STATE_SUCCESS and engine.tutorial_chapter_idx then
+            -- Auto-advance to next lesson in chapter
+            local chapter = TUTORIAL_CHAPTERS[engine.tutorial_chapter_idx]
+            local next_idx = engine.tutorial_lesson_idx + 1
+            if next_idx <= #chapter.lessons then
+                engine.tutorial_lesson_idx = next_idx
+                select_tutorial_lesson(chapter.lessons[next_idx], chapter.opponent)
+            else
+                -- Chapter complete
+                engine.tutorial_chapter_idx = nil
+                engine.tutorial_lesson_idx = nil
+                engine.state = STATE_IDLE
+                engine.current_exercise = nil
+            end
+        else
+            reset_exercise()
         end
-        reset_exercise()
     end
 end
 
@@ -1352,38 +1572,25 @@ local function combo_tracker_update()
         combo_tracker.fade_timer = 0
     end
 
-    -- Detect new hit (counter or waza increased)
+    -- Track P1 action changes to known moves (input-based, not hit-based)
+    -- Shows moves in the order performed, not the order hits land
     if combo_tracker.active and gs.combo_counter > 0 then
-        local new_hit = false
-        if gs.combo_counter > gs.combo_counter_prev and gs.combo_counter_prev >= 0 then
-            new_hit = true
-        elseif gs.waza_total ~= gs.waza_total_prev and gs.waza_total > 0 then
-            new_hit = true
-        end
-
-        if new_hit then
-            local action_id = gs.p1.action_string
-            -- Aegis activation shares action_id with Sphere_throw; remap when meter was consumed
-            if res.meter_consumed and SPHERE_TO_AEGIS[action_id] then
-                action_id = SPHERE_TO_AEGIS[action_id]
-            end
-            -- Deduplicate: don't add the same action_id consecutively (multi-hit moves)
-            if action_id ~= combo_tracker.last_action_id then
-                combo_tracker.last_action_id = action_id
-                local move_name = lookup_move_name(action_id)
+        local action = gs.p1.action_string
+        if action ~= combo_tracker.last_action_id then
+            local prefix = action:sub(1, 1)
+            if prefix == "A" or prefix == "S" then
+                combo_tracker.last_action_id = action
+                local move_name = lookup_move_name(action)
                 if not move_name then
-                    -- Build readable fallback: "spc?0021" instead of raw "S00210021"
                     local prefix_names = {
-                        A = "atk", S = "spc", T = "throw", G = "guard", M = "misc", N = ""
+                        A = "atk", S = "spc"
                     }
-                    local p = action_id:sub(1, 1)
-                    move_name = (prefix_names[p] or "") .. "?" .. action_id:sub(6)
+                    move_name = (prefix_names[prefix] or "") .. "?" .. action:sub(6)
                 end
                 table.insert(combo_tracker.moves, move_name)
 
                 -- Rebuild display string
                 combo_tracker.display_string = table.concat(combo_tracker.moves, " > ")
-                -- Truncate from left if too long
                 if #combo_tracker.display_string > 90 then
                     combo_tracker.display_string = "..." .. combo_tracker.display_string:sub(-87)
                 end
@@ -1595,7 +1802,7 @@ local function save_char_state(char_index)
     return true
 end
 
-local function load_char_state(char_index)
+load_char_state = function(char_index)
     local char = CHARACTERS[char_index]
     if not char then return false end
     local path = char_save_path(char)
@@ -1658,6 +1865,7 @@ end
 -- ============================================================================
 
 -- Menu modes
+-- Exercise menu tabs
 local MENU_ALL_EXERCISES = 1   -- All exercises (unfiltered)
 local MENU_CHAR_EXERCISES = 2  -- Character-filtered exercises
 local MENU_OPPONENT = 3
@@ -1675,9 +1883,27 @@ local menu = {
     sort_mode = "category",
 }
 
+-- Tutorial is its own mode, separate from the exercise menu
+local tutorial = {
+    show = false,
+    cursor = 1,            -- flat cursor position in chapter/lesson list
+}
+
 -- Sort modes for exercise list (cycled with HP)
 local SORT_MODES = {"category", "difficulty", "name"}
 local SORT_LABELS = { category = "Category", difficulty = "Diff", name = "Name" }
+
+-- Main menu (Coin button hub)
+local MAIN_MENU_ITEMS = {
+    { label = "Trials",    desc = "Pick an opponent and practice combos" },
+    { label = "Tutorial",  desc = "Learn Urien step by step" },
+}
+local main_menu = {
+    show = false,
+    cursor = 1,
+    was_frozen = false,
+    pending_choice = nil,  -- queued selection when no match is running yet
+}
 
 --- Rebuild both exercise index lists (all + character-filtered)
 --- Sorts by category order (combo → unblockable → sequence → parry)
@@ -1919,8 +2145,11 @@ local function draw_header()
     -- Line 1 (y=2): "URIEN LAB" on left, status on right
     draw_text(4, 2, "URIEN LAB", COLOR.text_cyan)
 
-    -- Right side of line 1: recording status or opponent name
-    if capture.active then
+    -- Right side of line 1: recording status, preview status, or opponent name
+    if engine.demo.active then
+        local elapsed = engine.demo.frame
+        draw_text(SCREEN_W - 80, 2, "PREVIEW", COLOR.text_cyan)
+    elseif capture.active then
         local elapsed = game_state.frame_count - capture.start_frame
         -- Flash every 30 frames
         if math.floor(elapsed / 15) % 2 == 0 then
@@ -1940,7 +2169,7 @@ local function draw_header()
         end
         draw_text(4, 8, exercise_label, COLOR.text_yellow)
     else
-        draw_text(4, 8, "Start=Menu  Coin=Record", COLOR.text_gray)
+        draw_text(4, 8, "Coin=Menu  Start=Record", COLOR.text_gray)
     end
 
     draw_text(SCREEN_W - 50, 8, #exercises .. " exercises", COLOR.text_gray)
@@ -1972,9 +2201,10 @@ local function draw_info_bar()
 
     local ex = engine.current_exercise
     local seq = ex.sequence
-    local bar_y = SCREEN_H - 30
+    local bar_h = (ex.description or engine.tutorial_chapter_idx) and 40 or 30
+    local bar_y = SCREEN_H - bar_h
 
-    draw_box(0, bar_y, SCREEN_W, 30, COLOR.bg_panel, COLOR.border)
+    draw_box(0, bar_y, SCREEN_W, bar_h, COLOR.bg_panel, COLOR.border)
 
     -- Pre-compute timing summary for completed steps
     local summary = compute_timing_summary()
@@ -2064,6 +2294,18 @@ local function draw_info_bar()
             hint_idx = ((prog.attempts - 1) % #ex.hints) + 1
         end
         draw_text(4, bar_y + 14, "Hint: " .. ex.hints[hint_idx], COLOR.text_orange)
+    end
+
+    -- Description line (tutorial lessons)
+    if ex.description then
+        draw_text(4, bar_y + 26, ex.description, COLOR.text_gray)
+    end
+
+    -- Tutorial chapter progress indicator
+    if engine.tutorial_chapter_idx then
+        local chapter = TUTORIAL_CHAPTERS[engine.tutorial_chapter_idx]
+        local progress = engine.tutorial_lesson_idx .. "/" .. #chapter.lessons
+        draw_text(SCREEN_W - 40, bar_y + 26, progress, COLOR.text_gray)
     end
 end
 
@@ -2155,7 +2397,7 @@ local function draw_result_banner()
         local line_y = banner_y + 16
         local prog = progression[ex.id]
         if prog then
-            local comp_str = prog.completions .. "/" .. MASTERY_THRESHOLD
+            local comp_str = prog.completions .. "/" .. get_mastery_threshold(ex)
             if prog.mastered then
                 comp_str = comp_str .. " MASTERED!"
             end
@@ -2273,9 +2515,9 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
         if #exercises > 0 and filter_active and not is_all then
             local opp_name = selected_opponent and selected_opponent.name or "opponent"
             draw_text(menu_x + 4, menu_y + 40,
-                "No exercises for " .. opp_name .. ". Press Coin to record.", COLOR.text_yellow)
+                "No exercises for " .. opp_name .. ". Press Start to record.", COLOR.text_yellow)
         else
-            draw_text(menu_x + 4, menu_y + 40, "No exercises. Press Coin to record a combo.", COLOR.text_yellow)
+            draw_text(menu_x + 4, menu_y + 40, "No exercises. Press Start to record a combo.", COLOR.text_yellow)
         end
         return
     end
@@ -2377,7 +2619,7 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
             -- Progress
             if prog and prog.completions > 0 then
                 draw_text(col_prog, row_y,
-                    prog.completions .. "/" .. MASTERY_THRESHOLD, COLOR.text_gray)
+                    prog.completions .. "/" .. get_mastery_threshold(ex), COLOR.text_gray)
             end
         end
         drawn = drawn + 1
@@ -2397,7 +2639,11 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
             end
             draw_text(hints_x, desc_y, "HP=Sort", COLOR.text_orange)
             draw_text(hints_x + 40, desc_y, "LK=Side", COLOR.text_cyan)
-            draw_text(hints_x + 80, desc_y, "MK=Tag", COLOR.text_yellow)
+            if engine.demo.recordings[sel.id] then
+                draw_text(hints_x + 80, desc_y, "MK=Preview", COLOR.text_green)
+            else
+                draw_text(hints_x + 80, desc_y, "MK=-", COLOR.text_gray)
+            end
             draw_text(hints_x + 120, desc_y, "HK=Del", COLOR.text_red)
         end
 
@@ -2453,6 +2699,127 @@ local function draw_opponent_tab(menu_x, menu_y, menu_w, row_h, visible_rows, me
     draw_text(menu_x + 4, center_y + 56, "Fierce = Re-save current state for " .. opp_name, COLOR.text_white)
 end
 
+--- Draw the tutorial tab in the menu
+local function draw_tutorial()
+    if not tutorial.show then return end
+
+    local menu_x = 20
+    local menu_y = 50
+    local menu_w = SCREEN_W - 40
+    local row_h = 12
+    local visible_rows = 9
+    local menu_h = visible_rows * row_h + 30
+
+    draw_gradient_box(menu_x, menu_y, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
+
+    -- Title
+    draw_text(menu_x + 4, menu_y + 2, "TUTORIAL", COLOR.text_cyan)
+
+    -- Build flat display list (always expanded)
+    local display = {}
+    for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
+        table.insert(display, { type = "chapter", chapter_idx = ci, chapter = chapter })
+        for li, lesson in ipairs(chapter.lessons) do
+            table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
+        end
+    end
+
+    local content_y_start = menu_y + 14
+    local content_rows = visible_rows
+
+    -- Scrolling
+    local start_row = 1
+    if tutorial.cursor > content_rows then
+        start_row = tutorial.cursor - content_rows + 1
+    end
+
+    local drawn = 0
+    local highlighted_item = nil
+    for di = start_row, #display do
+        if drawn >= content_rows then break end
+        local item = display[di]
+        local row_y = content_y_start + drawn * row_h
+
+        if item.type == "chapter" then
+            local is_selected = (di == tutorial.cursor)
+            local chapter = item.chapter
+            -- Count completion
+            local completed = 0
+            local total = #chapter.lessons
+            for _, lesson in ipairs(chapter.lessons) do
+                local prog = progression[lesson.id]
+                if prog and prog.mastered then completed = completed + 1 end
+            end
+            local chapter_color = COLOR.text_yellow
+            if completed == total and total > 0 then chapter_color = COLOR.text_green end
+
+            if is_selected then
+                draw_box(menu_x + 2, row_y - 1, menu_w - 4, row_h, 0xFFFFFF40, COLOR.transparent)
+                highlighted_item = item
+            end
+            draw_text(menu_x + 4, row_y, chapter.name:upper(), chapter_color)
+            draw_text(menu_x + menu_w - 40, row_y, completed .. "/" .. total, COLOR.text_gray)
+        else
+            local is_selected = (di == tutorial.cursor)
+            local lesson = item.lesson
+            local prog = progression[lesson.id]
+
+            if is_selected then
+                draw_box(menu_x + 2, row_y - 1, menu_w - 4, row_h, 0xFFFFFF40, COLOR.transparent)
+                highlighted_item = item
+            end
+
+            local status = "  "
+            local name_color = COLOR.text_white
+            if prog and prog.mastered then
+                status = "* "
+                name_color = COLOR.text_green
+            elseif prog and prog.completions > 0 then
+                status = "~ "
+                name_color = COLOR.text_yellow
+            end
+
+            draw_text(menu_x + 16, row_y, status, name_color)
+            draw_text(menu_x + 24, row_y, lesson.name, name_color)
+
+            -- Difficulty
+            draw_text(menu_x + menu_w - 40, row_y, tostring(lesson.difficulty or 1), COLOR.text_orange)
+        end
+        drawn = drawn + 1
+    end
+
+    -- Description for highlighted item
+    local desc_y = menu_y + menu_h - 10
+    if highlighted_item then
+        local desc
+        if highlighted_item.type == "chapter" then
+            desc = highlighted_item.chapter.description
+        else
+            desc = highlighted_item.lesson.description
+        end
+        if desc then
+            draw_text(menu_x + 4, desc_y, desc, COLOR.text_gray)
+        end
+    end
+
+    -- Opponent indicator + button hint
+    local hints_x = menu_x + menu_w - 80
+    if highlighted_item then
+        local opp = nil
+        if highlighted_item.type == "chapter" then
+            opp = highlighted_item.chapter.opponent
+        elseif highlighted_item.chapter_idx then
+            opp = TUTORIAL_CHAPTERS[highlighted_item.chapter_idx].opponent
+        end
+        if opp then
+            local opp_ok = selected_opponent and selected_opponent.name == opp
+            local opp_color = opp_ok and COLOR.text_green or COLOR.text_orange
+            draw_text(menu_x + menu_w - 160, desc_y, "vs " .. opp, opp_color)
+        end
+    end
+    draw_text(hints_x, desc_y, "LP=Select  L/R=Trials", COLOR.text_yellow)
+end
+
 local function draw_menu()
     if not menu.show then return end
 
@@ -2466,22 +2833,28 @@ local function draw_menu()
 
     draw_gradient_box(menu_x, menu_y, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
 
-    -- Tab bar
+    -- Tab bar (Tutorial is reachable via L/R but drawn as a separate mode)
     local tab_all_color = (menu.mode == MENU_ALL_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
     local char_label = selected_opponent and ("vs " .. selected_opponent.name) or "Character"
     local tab_char_color = (menu.mode == MENU_CHAR_EXERCISES) and COLOR.text_yellow or COLOR.text_gray
     local tab_opp_color = (menu.mode == MENU_OPPONENT) and COLOR.text_yellow or COLOR.text_gray
+    local tut_label = "<Tutorial"
     local all_label = "[All]"
     local char_label_full = "[" .. char_label .. "]"
-    local opp_label = "[Select Opponent]"
+    local opp_label = "[Opponent]"
+    local tut_end_label = "Tutorial>"
     local tab_cw = 4
     local tab_gap = 4
-    local x_all = menu_x + 4
+    local x_tut = menu_x + 4
+    local x_all = x_tut + #tut_label * tab_cw + tab_gap
     local x_char = x_all + #all_label * tab_cw + tab_gap
     local x_opp = x_char + #char_label_full * tab_cw + tab_gap
+    local x_tut_end = x_opp + #opp_label * tab_cw + tab_gap
+    draw_text(x_tut, menu_y + 2, tut_label, COLOR.text_gray)
     draw_text(x_all, menu_y + 2, all_label, tab_all_color)
     draw_text(x_char, menu_y + 2, char_label_full, tab_char_color)
     draw_text(x_opp, menu_y + 2, opp_label, tab_opp_color)
+    draw_text(x_tut_end, menu_y + 2, tut_end_label, COLOR.text_gray)
 
     if menu.mode == MENU_ALL_EXERCISES then
         draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h,
@@ -2492,6 +2865,50 @@ local function draw_menu()
     else
         draw_opponent_tab(menu_x, menu_y, menu_w, row_h, visible_rows, menu_h)
     end
+end
+
+--- Draw main menu (Coin hub)
+local function draw_main_menu()
+    if not main_menu.show then return end
+
+    local items = MAIN_MENU_ITEMS
+    local row_h = 14
+    local pad = 8
+    local title_h = 16
+    local footer_h = 12
+    local menu_h = title_h + #items * row_h + pad + footer_h + pad
+    local menu_w = 180
+    local mx = math.floor((SCREEN_W - menu_w) / 2)
+    local my = math.floor((SCREEN_H - menu_h) / 2)
+
+    draw_gradient_box(mx, my, menu_w, menu_h, COLOR.menu_top, COLOR.menu_bottom, COLOR.border_light)
+
+    -- Title
+    draw_text(mx + math.floor(menu_w / 2) - 20, my + 4, "URIEN LAB", COLOR.text_cyan)
+
+    -- Items
+    local list_y = my + title_h
+    for i, item in ipairs(items) do
+        local y = list_y + (i - 1) * row_h
+        local is_sel = (i == main_menu.cursor)
+        local label_color = is_sel and COLOR.text_yellow or COLOR.text_white
+
+        -- Cursor indicator
+        if is_sel then
+            draw_box(mx + 2, y, menu_w - 4, row_h, 0x222244FF, 0x00000000)
+            draw_text(mx + pad, y + 2, ">", COLOR.text_yellow)
+        end
+        draw_text(mx + pad + 8, y + 2, item.label, label_color)
+
+        -- Description for selected item (right-aligned or below)
+        if is_sel then
+            draw_text(mx + pad, list_y + #items * row_h + 2, item.desc, COLOR.text_gray)
+        end
+    end
+
+    -- Footer
+    local fy = my + menu_h - footer_h - 2
+    draw_text(mx + pad, fy, "LP=Select  Coin=Close", COLOR.text_gray)
 end
 
 --- Draw debug info
@@ -2545,6 +2962,10 @@ local function capture_start()
     capture.start_p1_x = game_state.p1.x_pos
     capture.start_p2_x = game_state.p2.x_pos
     capture.hit_count = 0
+    capture.last_action = game_state.p1.action_string
+    capture.combo_reset = false
+    capture.rec_log = {}              -- separate log for recording (never re-based)
+    capture.rec_start = game_state.frame_count
 
     -- Snapshot current setup state
     capture.setup_snapshot = {
@@ -2604,6 +3025,11 @@ local function capture_stop()
         table.insert(exercises, new_exercise)
         init_progression()
         rebuild_filtered_exercises()
+        -- Save input recording for preview playback (uses rec_log which
+        -- includes charge buildup frames before the first move)
+        local duration = game_state.frame_count - capture.rec_start
+        local recording = engine.demo.encode(capture.rec_log, duration)
+        engine.demo.save(new_exercise.id, recording)
         -- Open category selector instead of saving immediately
         cat_sel.active = true
         cat_sel.cursor = 1
@@ -2630,46 +3056,55 @@ local function capture_frame_update()
     local gs = game_state
     local frame_num = gs.frame_count - capture.start_frame
 
+    -- Record joypad state for playback (from original start, includes charge buildup)
+    capture.rec_log[gs.frame_count - capture.rec_start] = joypad.get() or {}
+
     -- Record this frame's joypad state for input notation detection
     capture.input_log[frame_num] = joypad.get() or {}
 
-    -- Detect normal/special hits (combo_counter only — waza_total fires on whiffs too)
-    local new_hit = false
-    if gs.combo_counter > gs.combo_counter_prev and gs.combo_counter > 0 then
-        new_hit = true
+    -- Track combo counter resets (for multi-combo sequences like unblockables)
+    if gs.combo_counter == 0 and gs.combo_counter_prev > 0 and capture.hit_count > 0 then
+        capture.combo_reset = true
     end
 
-    if new_hit then
-        -- On first hit, re-snapshot setup so exercise reflects combo start position
-        if capture.hit_count == 0 then
-            capture.start_frame = gs.frame_count
-            capture.start_p1_x = gs.p1.x_pos
-            capture.start_p2_x = gs.p2.x_pos
-            capture.setup_snapshot = {
-                p1_x = gs.p1.x_pos, p2_x = gs.p2.x_pos,
-                p1_flip = gs.p1.flip,
-                meter_bars = gs.meter_bars, meter_gauge = gs.meter_gauge,
-                corner = is_near_corner(gs.p2.x_pos),
-            }
-            -- Re-base frame number for this hit
-            frame_num = 0
+    -- Input-based detection: track P1 action changes to known moves.
+    -- Records moves in the order performed, not the order hits land.
+    -- Fixes ordering bugs where projectile hits (L.Sphere) were misattributed
+    -- to P1's current action (M.Aegis) when detected via combo counter.
+    local action = gs.p1.action_string
+    if action ~= capture.last_action then
+        capture.last_action = action
+        -- Only capture attacks (A) and specials/supers (S)
+        local prefix = action:sub(1, 1)
+        if prefix == "A" or prefix == "S" then
+            local move_name = lookup_move_name(action)
+            if move_name then
+                -- On first move, re-snapshot setup
+                if capture.hit_count == 0 then
+                    capture.start_frame = gs.frame_count
+                    frame_num = 0
+                    capture.start_p1_x = gs.p1.x_pos
+                    capture.start_p2_x = gs.p2.x_pos
+                    capture.setup_snapshot = {
+                        p1_x = gs.p1.x_pos, p2_x = gs.p2.x_pos,
+                        p1_flip = gs.p1.flip,
+                        meter_bars = gs.meter_bars, meter_gauge = gs.meter_gauge,
+                        corner = is_near_corner(gs.p2.x_pos),
+                    }
+                end
+
+                capture.hit_count = capture.hit_count + 1
+                table.insert(capture.sequence, {
+                    action_id = action,
+                    hit_type = "H",
+                    frame = frame_num,
+                })
+            end
         end
-        local action_id = gs.p1.action_string
-        local hit_type = "H"
-        -- Aegis activation shares action_id with Sphere_throw; remap when meter was consumed
-        if res.meter_consumed and SPHERE_TO_AEGIS[action_id] then
-            action_id = SPHERE_TO_AEGIS[action_id]
-            hit_type = "F"
-        end
-        capture.hit_count = capture.hit_count + 1
-        table.insert(capture.sequence, {
-            action_id = action_id,
-            hit_type = hit_type,
-            frame = frame_num,
-        })
     end
 
-    -- Detect projectile hits
+    -- Projectile scan: only for projectile-only moves not covered by action tracking
+    -- (e.g., Temporal Thunder F0068 which has no S/A-prefix in MOVES)
     local list = 3
     local obj_index = read_word_signed(MEM.obj_list_base + (list * 2))
     local count = 0
@@ -2684,14 +3119,37 @@ local function capture_frame_update()
             local hit_flg_prev = memory.readbyte(obj_addr + 0x189 + 0x04)
             if hit_flg ~= hit_flg_prev then
                 local proj_string = "F" .. string.format("%04x", tobi_id)
-                if memory.readbyte(obj_addr + 0x189 + 0x06) == 0 then
-                    capture.hit_count = capture.hit_count + 1
-                    table.insert(capture.sequence, {
-                        action_id = proj_string,
-                        hit_type = "F",
-                        frame = frame_num,
-                    })
-                    memory.writebyte(obj_addr + 0x189 + 0x06, 1)
+                -- Skip projectiles covered by action tracking (moves with both S/A and F IDs)
+                local covered = false
+                local pname = lookup_move_name(proj_string)
+                if pname and MOVES[pname] then
+                    for _, aid in ipairs(MOVES[pname].action_ids) do
+                        local ap = aid:sub(1,1)
+                        if ap == "A" or ap == "S" then covered = true; break end
+                    end
+                end
+                if not covered then
+                    if memory.readbyte(obj_addr + 0x189 + 0x06) == 0 then
+                        if capture.hit_count == 0 then
+                            capture.start_frame = gs.frame_count
+                            frame_num = 0
+                            capture.start_p1_x = gs.p1.x_pos
+                            capture.start_p2_x = gs.p2.x_pos
+                            capture.setup_snapshot = {
+                                p1_x = gs.p1.x_pos, p2_x = gs.p2.x_pos,
+                                p1_flip = gs.p1.flip,
+                                meter_bars = gs.meter_bars, meter_gauge = gs.meter_gauge,
+                                corner = is_near_corner(gs.p2.x_pos),
+                            }
+                        end
+                        capture.hit_count = capture.hit_count + 1
+                        table.insert(capture.sequence, {
+                            action_id = proj_string,
+                            hit_type = "F",
+                            frame = frame_num,
+                        })
+                        memory.writebyte(obj_addr + 0x189 + 0x06, 1)
+                    end
                 end
                 memory.writebyte(obj_addr + 0x189 + 0x04, hit_flg)
             end
@@ -3001,7 +3459,7 @@ build_exercise_from_capture = function()
     local final_frames = {}  -- frame timestamps for surviving entries (for ref_timing)
     local has_h_charge = false
     local has_v_charge = false
-    local has_combo_reset = false
+    local has_combo_reset = capture.combo_reset
     local last_frame = 0
 
     local prev_action_id = nil  -- for collapsing multi-hit moves
@@ -3015,23 +3473,17 @@ build_exercise_from_capture = function()
         prev_hit_frame = entry.frame
 
         if not is_multi_hit then
-            -- Skip non-attack entries (N=neutral, M=misc, G=guard, T=throw)
-            -- These appear during combo counter resets in multi-combo Aegis setups
-            local entry_prefix = entry.action_id:sub(1, 1)
-            if entry_prefix == "N" or entry_prefix == "M" or entry_prefix == "G" or entry_prefix == "T" then
-                has_combo_reset = true
-            else
-                prev_action_id = entry.action_id
+            prev_action_id = entry.action_id
 
-                -- Try MOVES lookup first (authoritative source of truth)
+            -- Try MOVES lookup first (authoritative source of truth)
                 local move_name, sf, numpad, move_type = lookup_move_name(entry.action_id)
 
                 if move_name then
-                    -- Known move: use database notation
+                    -- Known move: use all MOVES action_ids so any spacing variant matches
                     table.insert(sequence, {
                         name = move_name,
                         hit_type = entry.hit_type,
-                        action_ids = { entry.action_id },
+                        action_ids = MOVES[move_name].action_ids,
                     })
                     table.insert(final_frames, entry.frame)
                     table.insert(notations_sf, sf)
@@ -3077,8 +3529,7 @@ build_exercise_from_capture = function()
                     table.insert(move_names, display_name)
                 end
 
-                last_frame = entry.frame
-            end
+            last_frame = entry.frame
         end
     end
 
@@ -3312,6 +3763,22 @@ local function load_exercises_from_file(path, shipped_flag)
                             for aid in ids_str:gmatch("[^;]+") do
                                 table.insert(action_ids, normalize_action_string(aid))
                             end
+                            -- Expand to all known variants from MOVES database
+                            -- so any spacing variant matches (e.g. st.MP close/far)
+                            if MOVES[name] then
+                                action_ids = MOVES[name].action_ids
+                                -- Convert F-type to H-type for moves with S/A-prefix IDs
+                                -- (input-based matching via action changes, not projectile scan)
+                                if hit_type == "F" then
+                                    for _, aid in ipairs(action_ids) do
+                                        local ap = aid:sub(1,1)
+                                        if ap == "A" or ap == "S" then
+                                            hit_type = "H"
+                                            break
+                                        end
+                                    end
+                                end
+                            end
                             table.insert(current.sequence, {
                                 name = name,
                                 hit_type = hit_type,
@@ -3355,6 +3822,164 @@ local function load_exercises()
     end
 end
 
+--- Load tutorial chapters and lessons from urien_lab_tutorial.txt
+local function load_tutorial_chapters()
+    local f = io.open(TUTORIAL_FILE, "r")
+    if not f then
+        print("[Urien Lab] Warning: " .. TUTORIAL_FILE .. " not found")
+        return
+    end
+
+    TUTORIAL_CHAPTERS = {}
+    local current_chapter = nil
+    local current_lesson = nil
+
+    local default_setup = {
+        p1_x = 0x0100, p2_x = 0x0180,
+        p1_life = 0xA0, p2_life = 0xA0,
+        meter = "full",
+        fill_h_charge = false, fill_v_charge = false,
+        p2_state = "stand", corner = false,
+    }
+
+    local function finalize_block()
+        if current_lesson then
+            -- Apply defaults
+            if not current_lesson.setup then
+                current_lesson.setup = {}
+                for k, v in pairs(default_setup) do current_lesson.setup[k] = v end
+            end
+            if not current_lesson.success then
+                current_lesson.success = {}
+            end
+            if not current_lesson.difficulty then
+                current_lesson.difficulty = 1
+            end
+            if current_chapter then
+                table.insert(current_chapter.lessons, current_lesson)
+            end
+            current_lesson = nil
+        elseif current_chapter and not current_chapter._added then
+            current_chapter._added = true
+            table.insert(TUTORIAL_CHAPTERS, current_chapter)
+        end
+    end
+
+    for line in f:lines() do
+        if line == "---" then
+            finalize_block()
+        else
+            local key, value = line:match("^(.-):(.*)")
+            if key and value then
+                if key == "CHAPTER" then
+                    current_chapter = { name = value, lessons = {}, _added = false }
+                    current_lesson = nil
+                elseif key == "OPPONENT" and current_chapter then
+                    current_chapter.opponent = value
+                elseif key == "DESC" then
+                    if current_lesson then
+                        current_lesson.description = value
+                    elseif current_chapter then
+                        current_chapter.description = value
+                    end
+                elseif key == "ID" then
+                    current_lesson = { id = value }
+                elseif key == "NAME" and current_lesson then
+                    current_lesson.name = value
+                elseif key == "TYPE" and current_lesson then
+                    current_lesson.tutorial_type = value
+                elseif key == "SEQ" and current_lesson then
+                    current_lesson.sequence = {}
+                    for part in value:gmatch("[^|]+") do
+                        local name, hit_type, ids_str = part:match("^(.-),(.-),(.*)")
+                        if name then
+                            local action_ids = {}
+                            for aid in ids_str:gmatch("[^;]+") do
+                                table.insert(action_ids, normalize_action_string(aid))
+                            end
+                            if MOVES[name] then
+                                action_ids = MOVES[name].action_ids
+                                if hit_type == "F" then
+                                    for _, aid in ipairs(action_ids) do
+                                        local ap = aid:sub(1,1)
+                                        if ap == "A" or ap == "S" then
+                                            hit_type = "H"
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                            table.insert(current_lesson.sequence, {
+                                name = name,
+                                hit_type = hit_type,
+                                action_ids = action_ids,
+                            })
+                        end
+                    end
+                elseif key == "SETUP" and current_lesson then
+                    local p1x, p2x, p1l, p2l, meter, hc, vc, p2s, corner =
+                        value:match("^(%x+),(%x+),(%x+),(%x+),(%w+),(%d+),(%d+),(%w+),(%d+)")
+                    if p1x then
+                        current_lesson.setup = {
+                            p1_x = tonumber(p1x, 16),
+                            p2_x = tonumber(p2x, 16),
+                            p1_life = tonumber(p1l, 16),
+                            p2_life = tonumber(p2l, 16),
+                            meter = meter,
+                            fill_h_charge = (hc == "1"),
+                            fill_v_charge = (vc == "1"),
+                            p2_state = p2s,
+                            corner = (corner == "1"),
+                        }
+                    end
+                elseif key == "SUCCESS" and current_lesson then
+                    current_lesson.success = { min_combo = tonumber(value) or 1 }
+                elseif key == "HINT" and current_lesson then
+                    current_lesson.hints = { value }
+                elseif key == "DIFFICULTY" and current_lesson then
+                    current_lesson.difficulty = tonumber(value) or 1
+                elseif key == "BLOCK_MATCH" and current_lesson then
+                    current_lesson.block_match = value
+                elseif key == "DUMMY_ATTACK" and current_lesson then
+                    local parts = {}
+                    for p in value:gmatch("[^,]+") do
+                        table.insert(parts, p)
+                    end
+                    if #parts >= 3 then
+                        current_lesson.dummy_attack = {
+                            button = parts[1],
+                            delay = tonumber(parts[2]) or 40,
+                            repeat_interval = tonumber(parts[3]) or 90,
+                        }
+                        if parts[4] == "crouch" then
+                            current_lesson.dummy_attack.crouch = true
+                        end
+                    end
+                elseif key == "PUNISH_IDS" and current_lesson then
+                    current_lesson.punish_action_ids = {}
+                    for aid in value:gmatch("[^;]+") do
+                        table.insert(current_lesson.punish_action_ids, normalize_action_string(aid))
+                    end
+                elseif key == "RESETOK" and current_lesson then
+                    current_lesson.allow_combo_reset = (value == "1")
+                end
+            end
+        end
+    end
+
+    -- Finalize last block
+    finalize_block()
+
+    f:close()
+
+    local total_lessons = 0
+    for _, ch in ipairs(TUTORIAL_CHAPTERS) do
+        ch._added = nil  -- clean up internal flag
+        total_lessons = total_lessons + #ch.lessons
+    end
+    print("[Urien Lab] Loaded " .. #TUTORIAL_CHAPTERS .. " tutorial chapters (" .. total_lessons .. " lessons)")
+end
+
 --- Reload exercises from file (after user edits names, etc.)
 local function reload_exercises()
     -- Clear all exercises
@@ -3367,6 +3992,237 @@ local function reload_exercises()
     rebuild_filtered_exercises()
     print("[Urien Lab] Reloaded " .. #exercises .. " exercises")
 end
+
+-- ============================================================================
+-- [11d] PREVIEW / DEMO SYSTEM
+-- ============================================================================
+-- Records per-frame inputs during capture and plays them back as previews.
+-- Recordings stored in urien_lab_recordings.txt, keyed by exercise ID.
+-- Delta-encoded hex bitmask: only frames where input changes are stored.
+
+do -- scope demo helpers
+    local demo = engine.demo
+    local INPUT_BITS = {
+        ["P1 Up"] = 0x001, ["P1 Down"] = 0x002,
+        ["P1 Left"] = 0x004, ["P1 Right"] = 0x008,
+        ["P1 Weak Punch"] = 0x010, ["P1 Medium Punch"] = 0x020,
+        ["P1 Strong Punch"] = 0x040,
+        ["P1 Weak Kick"] = 0x080, ["P1 Medium Kick"] = 0x100,
+        ["P1 Strong Kick"] = 0x200,
+    }
+
+    --- Encode input_log into delta-compressed recording
+    function demo.encode(input_log, duration)
+        local deltas = {}
+        local prev_mask = 0
+        for f = 0, duration do
+            local state = input_log[f]
+            local mask = 0
+            if state then
+                for name, bit in pairs(INPUT_BITS) do
+                    if state[name] then mask = mask + bit end
+                end
+            end
+            if mask ~= prev_mask then
+                table.insert(deltas, { frame = f, mask = mask })
+                prev_mask = mask
+            end
+        end
+        return { duration = duration, deltas = deltas }
+    end
+
+    --- Serialize recording to string: "duration,frame:hex,frame:hex,..."
+    function demo.serialize(rec)
+        local parts = { tostring(rec.duration) }
+        for _, d in ipairs(rec.deltas) do
+            table.insert(parts, d.frame .. ":" .. string.format("%03x", d.mask))
+        end
+        return table.concat(parts, ",")
+    end
+
+    --- Deserialize recording from string
+    function demo.deserialize(str)
+        local iter = str:gmatch("[^,]+")
+        local duration = tonumber(iter()) or 0
+        local deltas = {}
+        for part in iter do
+            local f, m = part:match("^(%d+):(%x+)")
+            if f then
+                table.insert(deltas, { frame = tonumber(f), mask = tonumber(m, 16) })
+            end
+        end
+        return { duration = duration, deltas = deltas }
+    end
+
+    --- Convert bitmask to joypad table for joypad.set()
+    --- Only includes buttons that should be pressed (true).
+    --- Omitting a button lets physical input through; setting false would
+    --- only clear a prior script override without suppressing the physical pad.
+    function demo.mask_to_joypad(mask)
+        local inputs = {}
+        for name, bit in pairs(INPUT_BITS) do
+            if math.floor(mask / bit) % 2 == 1 then
+                inputs[name] = true
+            end
+        end
+        return inputs
+    end
+
+    --- Save a recording to file (append)
+    function demo.save(exercise_id, recording)
+        demo.recordings[exercise_id] = recording
+        local f = io.open("urien_lab_recordings.txt", "a")
+        if f then
+            f:write("---\n")
+            f:write("ID:" .. exercise_id .. "\n")
+            f:write("REC:" .. demo.serialize(recording) .. "\n")
+            f:write("---\n")
+            f:close()
+            print("[Preview] Saved recording for " .. exercise_id)
+        end
+    end
+
+    --- Load all recordings from file
+    function demo.load_all()
+        local f = io.open("urien_lab_recordings.txt", "r")
+        if not f then return 0 end
+        local count = 0
+        local current_id = nil
+        for line in f:lines() do
+            if line == "---" then
+                current_id = nil
+            else
+                local key, value = line:match("^(%w+):(.*)")
+                if key == "ID" then
+                    current_id = value
+                elseif key == "REC" and current_id then
+                    demo.recordings[current_id] = demo.deserialize(value)
+                    count = count + 1
+                    current_id = nil
+                end
+            end
+        end
+        f:close()
+        if count > 0 then
+            print("[Preview] Loaded " .. count .. " recordings")
+        end
+        return count
+    end
+
+    --- Start preview playback for an exercise
+    function demo.start(exercise_index)
+        local ex = exercises[exercise_index]
+        if not ex then return false end
+        local rec = demo.recordings[ex.id]
+        if not rec then
+            print("[Preview] No recording for " .. ex.id)
+            return false
+        end
+        -- Set up exercise via select_exercise (handles all engine state)
+        select_exercise(exercise_index)
+        demo.active = true
+        demo.recording = rec
+        demo.frame = 0
+        demo.delta_idx = 1
+        demo.current_mask = 0
+        demo.duration = rec.duration
+        demo.inputs_released = false
+        -- Pre-load the first real input so frame 0 of playback immediately
+        -- forces the intended move via joypad.set(true), overriding any
+        -- leaked physical button press from the menu
+        for _, d in ipairs(rec.deltas) do
+            if d.mask ~= 0 then
+                demo.current_mask = d.mask
+                demo.delta_idx = 2  -- skip past the pre-loaded entry
+                demo.frame = d.frame -- sync frame counter
+                break
+            end
+        end
+        -- Freeze game immediately so the menu button press doesn't leak
+        memory.writebyte(MEM.game_freeze, 0xFF)
+        return true
+    end
+
+    --- Stop preview playback
+    function demo.stop()
+        demo.active = false
+        demo.recording = nil
+        demo.frame = 0
+        demo.delta_idx = 1
+        demo.current_mask = 0
+        demo.inputs_released = false
+        engine.state = STATE_IDLE
+    end
+
+    --- Per-frame preview update: inject recorded inputs
+    function demo.frame_update()
+        if not demo.active or not demo.recording then return end
+
+        -- Wait for exercise setup and button release before injecting
+        if engine.state ~= STATE_ACTIVE then return end
+        if not demo.inputs_released then return end
+
+        -- Re-apply setup on first frames to undo any menu button effect
+        -- (joypad.set cannot suppress physical P1 input in FBNeo)
+        if demo.frame < 2 then
+            apply_exercise_setup(engine.current_exercise)
+        end
+
+        -- Advance through delta entries
+        local rec = demo.recording
+        while demo.delta_idx <= #rec.deltas and rec.deltas[demo.delta_idx].frame <= demo.frame do
+            demo.current_mask = rec.deltas[demo.delta_idx].mask
+            demo.delta_idx = demo.delta_idx + 1
+        end
+
+        -- Inject recorded inputs using Grouflon's read-modify-write pattern:
+        -- read full state, clear all P1, set demo inputs, write full state back.
+        -- A full-state joypad.set() suppresses physical input (partial does not).
+        local inputs = joypad.get()
+        for name, _ in pairs(INPUT_BITS) do
+            inputs[name] = false
+        end
+        for name, bit in pairs(INPUT_BITS) do
+            if math.floor(demo.current_mask / bit) % 2 == 1 then
+                inputs[name] = true
+            end
+        end
+        joypad.set(inputs)
+
+        demo.frame = demo.frame + 1
+
+        -- End when recording finishes (+ 60f buffer for final hits to land)
+        if demo.frame > demo.duration + 60 then
+            demo.stop()
+        end
+    end
+
+    --- Check if user pressed any button to exit preview.
+    --- Waits for all buttons to be released first (so the MK that started
+    --- preview doesn't immediately stop it).
+    function demo.check_exit()
+        if not demo.active then return end
+        local physical = joypad.get()
+        if not physical then return end
+        local exit_buttons = {
+            "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
+            "P1 Weak Kick", "P1 Medium Kick", "P1 Strong Kick",
+            "P1 Start",
+        }
+        local any_held = false
+        for _, key in ipairs(exit_buttons) do
+            if physical[key] then any_held = true; break end
+        end
+        if not demo.inputs_released then
+            -- Wait for user to release all buttons first
+            if not any_held then
+                demo.inputs_released = true
+            end
+        elseif any_held then
+            demo.stop()
+        end
+    end
+end -- scope demo helpers
 
 -- ============================================================================
 -- [12] MAIN LOOP CALLBACKS
@@ -3449,6 +4305,11 @@ local function handle_charselect_input()
         if load_char_state(char_cursor) then
             app_state = APP_TRAINING
             engine.state = STATE_IDLE
+            -- Apply queued menu selection from Coin hub
+            if main_menu.pending_choice == 2 then
+                tutorial.show = true
+            end
+            main_menu.pending_choice = nil
         end
     elseif is_pressed("P1 Strong Punch") then
         -- Save current game state for this character
@@ -3506,21 +4367,97 @@ local function handle_category_selector_input()
     end
 end
 
+--- Handle tutorial navigation input
+local function handle_tutorial_input()
+    if not tutorial.show then return end
+
+    -- Build flat display list (always expanded)
+    local display = {}
+    for ci, chapter in ipairs(TUTORIAL_CHAPTERS) do
+        table.insert(display, { type = "chapter", chapter_idx = ci })
+        for li, lesson in ipairs(chapter.lessons) do
+            table.insert(display, { type = "lesson", chapter_idx = ci, lesson_idx = li, lesson = lesson })
+        end
+    end
+
+    if is_pressed("P1 Up") then
+        tutorial.cursor = tutorial.cursor - 1
+        if tutorial.cursor < 1 then tutorial.cursor = #display end
+    elseif is_pressed("P1 Down") then
+        tutorial.cursor = tutorial.cursor + 1
+        if tutorial.cursor > #display then tutorial.cursor = 1 end
+    elseif is_pressed("P1 Weak Punch") then
+        local item = display[tutorial.cursor]
+        if item then
+            if item.type == "chapter" then
+                start_tutorial_chapter(item.chapter_idx)
+                tutorial.show = false
+            elseif item.type == "lesson" then
+                local chapter = TUTORIAL_CHAPTERS[item.chapter_idx]
+                engine.tutorial_chapter_idx = item.chapter_idx
+                engine.tutorial_lesson_idx = item.lesson_idx
+                select_tutorial_lesson(item.lesson, chapter and chapter.opponent)
+                tutorial.show = false
+            end
+        end
+    elseif is_pressed("P1 Coin") then
+        tutorial.show = false
+    elseif is_pressed("P1 Left") or is_pressed("P1 Right") then
+        -- Switch to exercise menu
+        tutorial.show = false
+        engine.tutorial_chapter_idx = nil
+        engine.tutorial_lesson_idx = nil
+        menu.show = true
+    end
+
+    -- Clamp cursor
+    local total = 0
+    for _, chapter in ipairs(TUTORIAL_CHAPTERS) do
+        total = total + 1 + #chapter.lessons
+    end
+    if tutorial.cursor > total then
+        tutorial.cursor = math.max(1, total)
+    end
+end
+
 --- Handle menu navigation input
 local function handle_menu_input()
     if not menu.show then return end
 
-    -- Tab switching: Left/Right cycles All → Character → Opponent → All
+    -- Tab switching: Left/Right cycles [Tutorial] ← All → Character → Opponent → [Tutorial]
+    local tab_order = { MENU_ALL_EXERCISES, MENU_CHAR_EXERCISES, MENU_OPPONENT }
     if is_pressed("P1 Right") then
-        if menu.mode == MENU_ALL_EXERCISES then menu.mode = MENU_CHAR_EXERCISES
-        elseif menu.mode == MENU_CHAR_EXERCISES then menu.mode = MENU_OPPONENT
-        else menu.mode = MENU_ALL_EXERCISES end
+        local found = false
+        for i, t in ipairs(tab_order) do
+            if menu.mode == t then
+                if i == #tab_order then
+                    -- Last tab → switch to tutorial
+                    menu.show = false
+                    tutorial.show = true
+                else
+                    menu.mode = tab_order[i + 1]
+                end
+                found = true
+                break
+            end
+        end
         menu.delete_id = nil
         return
     elseif is_pressed("P1 Left") then
-        if menu.mode == MENU_ALL_EXERCISES then menu.mode = MENU_OPPONENT
-        elseif menu.mode == MENU_OPPONENT then menu.mode = MENU_CHAR_EXERCISES
-        else menu.mode = MENU_ALL_EXERCISES end
+        local found = false
+        for i, t in ipairs(tab_order) do
+            if menu.mode == t then
+                if i == 1 then
+                    -- First tab → switch to tutorial
+                    menu.show = false
+                    tutorial.show = true
+                else
+                    menu.mode = tab_order[i - 1]
+                end
+                found = true
+                break
+            end
+        end
         menu.delete_id = nil
         return
     end
@@ -3612,31 +4549,12 @@ local function handle_menu_input()
                 save_progression()
             end
         elseif is_pressed("P1 Medium Kick") then
-            -- Toggle current opponent tag on highlighted exercise
+            -- Preview: play back recorded inputs for selected exercise
             local real_idx = ex_list[cur]
-            local sel = real_idx and exercises[real_idx]
-            if sel and selected_opponent then
-                local opp = selected_opponent.name
-                if not sel.characters then sel.characters = {} end
-                local found = false
-                for j, char_name in ipairs(sel.characters) do
-                    if char_name == opp then
-                        table.remove(sel.characters, j)
-                        found = true
-                        print("[Urien Lab] Untagged " .. opp .. " from " .. sel.name)
-                        break
-                    end
+            if real_idx then
+                if engine.demo.start(real_idx) then
+                    menu.show = false
                 end
-                if not found then
-                    table.insert(sel.characters, opp)
-                    print("[Urien Lab] Tagged " .. sel.name .. " for " .. opp)
-                end
-                if sel.shipped then
-                    print("[Urien Lab] Tag change is session-only for shipped exercises")
-                else
-                    save_exercises()
-                end
-                rebuild_filtered_exercises()
             end
         end
 
@@ -3675,6 +4593,42 @@ local function handle_menu_input()
 end
 
 --- Handle general input
+--- Handle main menu input (Coin hub)
+local function handle_main_menu_input()
+    if not main_menu.show then return end
+    local items = MAIN_MENU_ITEMS
+
+    if is_pressed("P1 Up") then
+        main_menu.cursor = main_menu.cursor - 1
+        if main_menu.cursor < 1 then main_menu.cursor = #items end
+    elseif is_pressed("P1 Down") then
+        main_menu.cursor = main_menu.cursor + 1
+        if main_menu.cursor > #items then main_menu.cursor = 1 end
+    elseif is_pressed("P1 Weak Punch") then
+        local choice = main_menu.cursor
+        main_menu.show = false
+
+        if choice == 1 then
+            -- Trials: open character select to pick opponent
+            menu.show = false
+            app_state = APP_CHARSELECT
+            charselect_visible = true
+        elseif choice == 2 then
+            -- Tutorial: open the tutorial browser
+            if not game_state.playing then
+                main_menu.pending_choice = choice
+            else
+                if app_state == APP_CHARSELECT then
+                    app_state = APP_TRAINING
+                    charselect_visible = false
+                end
+                tutorial.show = true
+                menu.show = false
+            end
+        end
+    end
+end
+
 local function handle_input()
     -- Category selector blocks all other input while active
     if cat_sel.active then
@@ -3682,27 +4636,36 @@ local function handle_input()
         return
     end
 
-    -- Start button toggles menu
-    if is_pressed("P1 Start") then
-        if menu.show then
-            menu.show = false
+    -- Tutorial mode blocks all other input
+    if tutorial.show then
+        handle_tutorial_input()
+        return
+    end
+
+    -- Coin = Toggle menu (tutorial browser if in tutorial, exercise menu otherwise)
+    if is_pressed("P1 Coin") then
+        if engine.tutorial_chapter_idx then
+            tutorial.show = not tutorial.show
         else
-            menu.show = true
-            -- Pause exercise when opening menu
-            if engine.state == STATE_ACTIVE then
-                engine.state = STATE_SETUP
-                engine.setup_timer = SETUP_DELAY_FRAMES
-            end
+            menu.show = not menu.show
+        end
+        if (menu.show or tutorial.show) and engine.state == STATE_ACTIVE then
+            engine.state = STATE_SETUP
+            engine.setup_timer = SETUP_DELAY_FRAMES
         end
     end
 
-    -- Coin = Toggle record-to-exercise capture
-    if is_pressed("P1 Coin") then
-        capture_toggle()
-    end
-
     if menu.show then
-        handle_menu_input()
+        if is_pressed("P1 Start") then
+            menu.show = false
+        else
+            handle_menu_input()
+        end
+    else
+        -- Start button toggles recording
+        if is_pressed("P1 Start") then
+            capture_toggle()
+        end
     end
 end
 
@@ -3742,6 +4705,11 @@ local function update_charselect_sequence()
             selected_opponent = nil
             rebuild_filtered_exercises()
             memory.writebyte(MEM.round_timer, 100)
+            -- Apply queued menu selection from Coin hub
+            if main_menu.pending_choice == 2 then
+                tutorial.show = true
+            end
+            main_menu.pending_choice = nil
             print("[Urien Lab] Match started -- training mode active")
         end
     end
@@ -3758,12 +4726,35 @@ local function on_frame()
     -- Game character select: P1 selecting (1), P2 debounce (2), or P2 selecting (3)
     if charselect_seq >= 1 and charselect_seq <= 3 then
         read_input()
-        update_charselect_sequence()
         if is_pressed("P1 Coin") then
-            charselect_visible = not charselect_visible
+            main_menu.show = not main_menu.show
         end
-        if charselect_visible then
-            handle_charselect_input()
+        if main_menu.show then
+            main_menu.was_frozen = true
+            handle_main_menu_input()
+            freeze_game()
+        elseif main_menu.was_frozen then
+            -- Stay frozen until all buttons released so the closing press
+            -- doesn't pass through to the game's character select
+            local any_held = false
+            for _, btn in ipairs({
+                "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
+                "P1 Weak Kick", "P1 Medium Kick", "P1 Strong Kick",
+                "P1 Start", "P1 Up", "P1 Down", "P1 Left", "P1 Right",
+            }) do
+                if input_current[btn] then any_held = true; break end
+            end
+            if not any_held then
+                main_menu.was_frozen = false
+            else
+                freeze_game()
+            end
+        else
+            -- Only update game char select when menu is fully closed
+            update_charselect_sequence()
+            if charselect_visible then
+                handle_charselect_input()
+            end
         end
         if charselect_seq == 3 then  -- P2 selecting: swap P1↔P2
             swap_inputs()
@@ -3796,6 +4787,14 @@ local function on_frame()
     read_game_state()
 
     if app_state == APP_CHARSELECT then
+        -- Main menu takes priority over character select
+        if is_pressed("P1 Coin") then
+            main_menu.show = not main_menu.show
+        end
+        if main_menu.show then
+            handle_main_menu_input()
+            return
+        end
         handle_charselect_input()
         -- If we just transitioned to training, skip this frame so Start
         -- doesn't also toggle the exercise menu
@@ -3811,6 +4810,11 @@ local function on_frame()
     -- APP_TRAINING
     if not game_state.playing then return end
 
+    -- Preview: check for exit (input injection happens at end of frame)
+    if engine.demo.active then
+        engine.demo.check_exit()
+    end
+
     handle_input()
 
     if not menu.show then
@@ -3819,9 +4823,42 @@ local function on_frame()
     end
     combo_tracker_update()
 
-    -- Keep dummy locked when exercise is active
+    -- Keep dummy locked when exercise is active (with dummy_attack override for blocking lessons)
     if engine.state == STATE_SETUP or engine.state == STATE_ACTIVE then
-        lock_dummy()
+        local ex = engine.current_exercise
+        if ex and ex.dummy_attack and engine.state == STATE_ACTIVE then
+            local frames_active = game_state.frame_count - engine.active_start_frame
+            local da = ex.dummy_attack
+            if frames_active >= da.delay then
+                local cycle_pos = (frames_active - da.delay) % da.repeat_interval
+                if cycle_pos < 3 then
+                    -- Press attack for 3 frames, lock other buttons
+                    local attack_input = { [da.button] = true }
+                    -- Hold crouch if required (for low attacks)
+                    if da.crouch then
+                        attack_input["P2 Down"] = true
+                    end
+                    -- Lock non-attack P2 directions (except crouch if needed)
+                    attack_input["P2 Up"] = false
+                    if not da.crouch then attack_input["P2 Down"] = false end
+                    attack_input["P2 Left"] = false
+                    attack_input["P2 Right"] = false
+                    joypad.set(attack_input)
+                else
+                    lock_dummy()
+                end
+            else
+                lock_dummy()
+            end
+        else
+            lock_dummy()
+        end
+    end
+
+    -- Preview: inject recorded P1 inputs LAST so they aren't overwritten
+    -- by other joypad.set() calls (FBNeo: last call wins per key)
+    if engine.demo.active then
+        engine.demo.frame_update()
     end
 end
 
@@ -3830,14 +4867,18 @@ local function on_gui()
     -- Game character select sequence: freeze timer and draw HUD
     if charselect_seq >= 1 and charselect_seq <= 3 then
         memory.writebyte(MEM.char_select_timer, 0x69)
-        if charselect_visible then
+        if charselect_visible and not main_menu.show then
             draw_charselect()
-        else
+        elseif not main_menu.show then
             local msg = charselect_seq == 1
                 and "Select your character"
                 or "Select opponent"
             draw_text(4, 4, "URIEN LAB -- " .. msg, COLOR.text_cyan)
-            draw_text(4, 14, "Coin = Quick-load matchup", COLOR.text_gray)
+            draw_text(4, 14, "Coin = Menu", COLOR.text_gray)
+        end
+        draw_main_menu()
+        if main_menu.pending_choice and not main_menu.show then
+            draw_text(4, SCREEN_H - 10, "Tutorial queued", COLOR.text_yellow)
         end
         return
     elseif charselect_seq == 4 then  -- transitioning
@@ -3849,7 +4890,7 @@ local function on_gui()
         -- Freeze/unfreeze game logic during menu/popup states.
         -- After menu closes, stay frozen until all buttons are released
         -- so the closing press doesn't pass through to the game.
-        local menu_active = menu.show or cat_sel.active
+        local menu_active = main_menu.show or menu.show or tutorial.show or cat_sel.active
         if menu_active then
             menu.was_frozen = true
         end
@@ -3866,11 +4907,21 @@ local function on_gui()
                 menu.was_frozen = false
             end
         end
-        if menu_active or menu.was_frozen then
+        local should_freeze = menu_active or menu.was_frozen
+            or (engine.demo.active and not engine.demo.inputs_released)
+        if should_freeze then
             memory.writebyte(MEM.game_freeze, 0xFF)
         else
+            if menu.just_unfroze then
+                -- Refill meter immediately on unfreeze (no 90f wait)
+                fill_meter_full()
+                res.meter_consumed = false
+                res.meter_refill = 0
+                menu.just_unfroze = false
+            end
             memory.writebyte(MEM.game_freeze, 0x00)
         end
+        menu.just_unfroze = should_freeze
 
         -- Freeze round timer (infinite time)
         memory.writebyte(MEM.round_timer, 100)
@@ -3924,13 +4975,17 @@ local function on_gui()
     end
 
     if app_state == APP_CHARSELECT then
-        if charselect_visible and game_state.playing then
+        if (charselect_visible or main_menu.show) and game_state.playing then
             memory.writebyte(MEM.game_freeze, 0xFF)
         end
-        if charselect_visible then
+        if charselect_visible and not main_menu.show then
             draw_charselect()
-        else
+        elseif not main_menu.show then
             draw_text(4, 4, "URIEN LAB -- Press Start for menu", COLOR.text_cyan)
+        end
+        draw_main_menu()
+        if main_menu.pending_choice and not main_menu.show then
+            draw_text(4, SCREEN_H - 10, "Tutorial queued", COLOR.text_yellow)
         end
         return
     end
@@ -3948,6 +5003,8 @@ local function on_gui()
     draw_result_banner()
     draw_setup_overlay()
     draw_menu()
+    draw_tutorial()
+    draw_main_menu()
     draw_debug()
 
     -- Category selector or exercise creation banner
@@ -3981,6 +5038,10 @@ local function on_savestate_load()
     combo_tracker.last_action_id = nil
     combo_tracker.fade_timer = 0
     combo_tracker.active = false
+    -- Re-freeze after save state load so menu button presses don't leak
+    -- (save state restores game_freeze to 0x00, overwriting our freeze)
+    memory.writebyte(MEM.game_freeze, 0xFF)
+    menu.was_frozen = true
 end
 
 --- Emulator start callback
@@ -3993,11 +5054,50 @@ end
 -- [13] HOOK REGISTRATION
 -- ============================================================================
 
+-- Testing: export internals and skip emulator registration
+if TESTING then
+    load_tutorial_chapters()
+    init_progression()
+    return {
+        engine = engine,
+        game_state = game_state,
+        progression = progression,
+        menu = menu,
+        main_menu = main_menu,
+        MAIN_MENU_ITEMS = MAIN_MENU_ITEMS,
+        TUTORIAL_CHAPTERS = TUTORIAL_CHAPTERS,
+        load_tutorial_chapters = load_tutorial_chapters,
+        STATE_IDLE = STATE_IDLE,
+        STATE_SETUP = STATE_SETUP,
+        STATE_ACTIVE = STATE_ACTIVE,
+        STATE_SUCCESS = STATE_SUCCESS,
+        STATE_FAIL = STATE_FAIL,
+        MENU_ALL_EXERCISES = MENU_ALL_EXERCISES,
+        MENU_CHAR_EXERCISES = MENU_CHAR_EXERCISES,
+        MENU_OPPONENT = MENU_OPPONENT,
+        MASTERY_THRESHOLD = MASTERY_THRESHOLD,
+        TUTORIAL_MASTERY_THRESHOLD = TUTORIAL_MASTERY_THRESHOLD,
+        get_mastery_threshold = get_mastery_threshold,
+        select_tutorial_lesson = select_tutorial_lesson,
+        start_tutorial_chapter = start_tutorial_chapter,
+        engine_active_update = engine_active_update,
+        engine_setup_update = engine_setup_update,
+        engine_result_update = engine_result_update,
+        engine_update = engine_update,
+        reset_exercise = reset_exercise,
+        lock_dummy = lock_dummy,
+    }
+end
+
 -- Fetch available save states from manifest (for on-demand download)
 fetch_available_saves()
 
+-- Load tutorial chapters from file
+load_tutorial_chapters()
+
 -- Load exercises FIRST (before progression, so init_progression sees exercise IDs)
 load_exercises()
+engine.demo.load_all()
 -- Load saved progress, matchup slots, and character states
 load_progression()
 rebuild_filtered_exercises()
@@ -4075,16 +5175,16 @@ print("    D-Pad     = Navigate characters")
 print("    Jab       = Load opponent state")
 print("    Fierce    = Save current state")
 print("  TRAINING:")
-print("    Start     = Open exercise menu")
-print("    Left/Right= Switch tabs (Exercises/Opponent)")
+print("    Coin      = Open main menu")
+print("    Start     = Toggle recording")
+print("    Left/Right= Switch tabs (Tutorial/All/Character/Opponent)")
 print("    LK        = Toggle exercise side (L/R)")
-print("    MK        = Tag/untag opponent on exercise")
+print("    MK        = Preview recorded combo")
 print("    MP        = Stop exercise (in menu)")
-print("  Coin        = Toggle capture mode")
 print("  Alt+1       = Return to character select")
 print("  Alt+2       = Toggle notation (SF/Numpad)")
 print("  Alt+3       = Reset current exercise progress")
 print("  Alt+4       = Toggle debug display")
-print("  Alt+5       = Toggle menu (backup)")
+print("  Alt+5       = Toggle exercise menu directly")
 print("  Alt+9       = Reload exercises (after editing file)")
 print("===========================================")
