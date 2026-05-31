@@ -74,7 +74,7 @@ NOTATION_SF:d+HP, d~u+PP, qcf+LP, qcf+MP (SA3), MP, d~u+HK(air), d~u+MP, j.HK, d
 NOTATION_NP:2HP, [2]8PP, 236LP, 236MP(SA3), 5MP, [2]8HK(air), [2]8MP, j.HK, 2HP, [4]6MK, 236HP(SA3), [4]6HK
 DIFFICULTY:5
 CATEGORY:unblockable
-CHARS:Ken, Ryu, Akuma, Dudley, Makoto, Urien, 
+CHARS:Ken, Ryu, Akuma, Sean, Dudley, Makoto, Urien, Remy, Yun, Yang, Twelve, Oro
 SETUP:4C68,1C00,A0,A0,full,1,1,stand,1
 SEQ:cr.HP,H,A00180018|EX.Headbutt,H,S002c002c|L.Sphere,H,S00210021;F0053|M.Aegis,H,S003f003f;F077c|st.MP,H,A0000009e;A0001009e;A00030003|H.Knee,H,S001b001b|M.Headbutt,H,S002a002a|j.HK,H,A0046002e;A002e002e;A003a002e|cr.HP,H,A00180018|M.Tackle,H,S003b003b|H.Aegis,H,S00400040;F077d|H.Tackle,H,S003c003c
 SUCCESS:12
