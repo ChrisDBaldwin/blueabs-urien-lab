@@ -67,3 +67,18 @@ SUCCESS:3
 TIMING:0,55,45
 HINT: down-back > up-back > down-back during launcher partitions charge for headbutt after tackle
 ---
+---
+ID:c_37
+NAME:Midscreen 1.5 Meter
+NOTATION_SF:d+HP, d~u+PP, qcf+LP, qcf+MP (SA3), MP, d~u+HK(air), d~u+MP, j.HK, d+HP, b~f+MK, qcf+HP (SA3), b~f+HK
+NOTATION_NP:2HP, [2]8PP, 236LP, 236MP(SA3), 5MP, [2]8HK(air), [2]8MP, j.HK, 2HP, [4]6MK, 236HP(SA3), [4]6HK
+DIFFICULTY:5
+CATEGORY:unblockable
+CHARS:Ken, Ryu, Akuma, Dudley, Makoto, Urien, 
+SETUP:4C68,1C00,A0,A0,full,1,1,stand,1
+SEQ:cr.HP,H,A00180018|EX.Headbutt,H,S002c002c|L.Sphere,H,S00210021;F0053|M.Aegis,H,S003f003f;F077c|st.MP,H,A0000009e;A0001009e;A00030003|H.Knee,H,S001b001b|M.Headbutt,H,S002a002a|j.HK,H,A0046002e;A002e002e;A003a002e|cr.HP,H,A00180018|M.Tackle,H,S003b003b|H.Aegis,H,S00400040;F077d|H.Tackle,H,S003c003c
+SUCCESS:12
+RESETOK:1
+TIMING:0,56,52,17,66,15,54,53,48,56,23,67
+HINT:The S.MP into H.Knee is like S.MP into EX.Headbutt
+---

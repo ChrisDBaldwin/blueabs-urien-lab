@@ -24,7 +24,7 @@
 --   Jab (P1 Weak Punch)      = Select exercise
 --   Strong (P1 Medium Punch)  = Stop exercise (in menu) / Close menu
 --   LK (P1 Weak Kick)         = Toggle exercise side (L/R)
---   MK (P1 Medium Kick)       = Tag/untag opponent on exercise
+--   MK (P1 Medium Kick)       = Preview recorded combo
 --   Alt+2        = Toggle numpad notation
 --   Alt+3        = Reset current exercise progress
 --   Alt+5        = Toggle menu (reliable backup for Start)
@@ -34,7 +34,7 @@
 -- [1] CONSTANTS & CONFIG
 -- ============================================================================
 
-local SCRIPT_VERSION = "0.6.2"
+local SCRIPT_VERSION = "0.6.3"
 local SAVE_FILE = "urien_lab_save.txt"
 local CAPTURE_FILE = "captured_exercises.txt"
 local MATCHUP_FILE = "urien_lab_matchups.txt"
@@ -1004,6 +1004,17 @@ local engine = {
     -- Tutorial sequential playthrough
     tutorial_chapter_idx = nil,   -- which chapter is being played (nil = not in tutorial sequence)
     tutorial_lesson_idx = nil,    -- current lesson position within that chapter
+
+    -- Preview/demo playback state
+    demo = {
+        recordings = {},    -- [exercise_id] = { duration=N, deltas={{frame,mask},...} }
+        active = false,
+        recording = nil,
+        frame = 0,
+        delta_idx = 1,
+        current_mask = 0,
+        duration = 0,
+    },
 }
 
 -- Combo tracker: live display of moves as they land (independent of exercise engine)
@@ -1324,22 +1335,23 @@ local function engine_active_update()
 
     local current_step = seq[engine.combo_index]
 
-    -- Check for combo drops: if combo counter was > 0 and resets to 0, and we haven't
-    -- finished the sequence, that's a drop (skip for multi-combo exercises like Aegis setups)
-    if not ex.allow_combo_reset and engine.combo_index > 1 and game_state.combo_counter == 0 and game_state.combo_counter_prev > 0 then
-        engine.state = STATE_FAIL
-        engine.result_timer = FAIL_DISPLAY_FRAMES
-
-        -- Structured fail diagnostics
-        engine.fail_step_index = engine.combo_index
-        engine.fail_type = "drop"
-        engine.fail_gap = game_state.frame_count - engine.last_hit_frame
-        engine.fail_ref_gap = (ex.ref_timing and ex.ref_timing[engine.combo_index]) or 0
-        engine.fail_last_action = lookup_move_name(game_state.p1.action_string) or game_state.p1.action_string
-
-        -- Backward-compat fail_reason
-        engine.fail_reason = "Combo dropped at: " .. current_step.name
-        return
+    -- Fail if no step progress for too long after sequence has started.
+    -- Timeout scales with ref_timing: 3x expected gap, min 60f, fallback 120f.
+    if engine.combo_index > 1 then
+        local last_progress = engine.last_hit_frame > 0 and engine.last_hit_frame or engine.active_start_frame
+        local ref = ex.ref_timing and ex.ref_timing[engine.combo_index]
+        local timeout = ref and math.max(ref * 3, 60) or 120
+        if game_state.frame_count - last_progress > timeout then
+            engine.state = STATE_FAIL
+            engine.result_timer = FAIL_DISPLAY_FRAMES
+            engine.fail_step_index = engine.combo_index
+            engine.fail_type = "drop"
+            engine.fail_gap = game_state.frame_count - last_progress
+            engine.fail_ref_gap = (ex.ref_timing and ex.ref_timing[engine.combo_index]) or 0
+            engine.fail_last_action = lookup_move_name(game_state.p1.action_string) or game_state.p1.action_string
+            engine.fail_reason = "Combo dropped at: " .. current_step.name
+            return
+        end
     end
 
     -- Check for projectile hits (F-type moves)
@@ -1357,12 +1369,10 @@ local function engine_active_update()
             end
         end
     else
-        -- Check for normal/special hits (H-type moves)
-        -- Track whether the action string has changed since the last matched
-        -- step.  Multi-hit normals (cr.HP = 2 hits) and multi-frame counter/
-        -- waza noise can cause spurious new_hit signals while the player is
-        -- still in the same move.  Requiring the action to change first
-        -- ensures each step corresponds to a genuinely new move input.
+        -- Check for normal/special moves (H-type) via input tracking.
+        -- Matches when P1's action changes to an expected move, regardless of
+        -- whether it hits.  Success criteria (min_combo) validates hits at the end.
+        -- This handles setup combos, resets, feints, and unblockable follow-throughs.
         if game_state.p1.action_string ~= engine.last_match_action then
             engine.action_changed_since_match = true
         end
@@ -1382,12 +1392,7 @@ local function engine_active_update()
             end
         end
 
-        local new_hit = false
-        if game_state.combo_counter > game_state.combo_counter_prev and game_state.combo_counter > 0 then
-            new_hit = true
-        end
-
-        if new_hit and (engine.action_changed_since_match or (engine.next_expects_same_action and engine.new_input_since_match)) then
+        if engine.action_changed_since_match or (engine.next_expects_same_action and engine.new_input_since_match) then
             local hit_waza = game_state.p1.action_string
             engine.last_hit_waza = hit_waza
 
@@ -1433,8 +1438,9 @@ local function engine_active_update()
     -- Check if all steps completed
     if engine.combo_index > #seq then
         local min_combo = ex.success.min_combo
-        if min_combo and game_state.combo_counter < min_combo then
+        if min_combo and not ex.allow_combo_reset and game_state.combo_counter < min_combo then
             -- Combo dropped before completing — don't count as success
+            -- (skipped for multi-combo sequences where counter resets are expected)
             engine.combo_index = #seq
         else
             engine.state = STATE_SUCCESS
@@ -1566,38 +1572,25 @@ local function combo_tracker_update()
         combo_tracker.fade_timer = 0
     end
 
-    -- Detect new hit (counter or waza increased)
+    -- Track P1 action changes to known moves (input-based, not hit-based)
+    -- Shows moves in the order performed, not the order hits land
     if combo_tracker.active and gs.combo_counter > 0 then
-        local new_hit = false
-        if gs.combo_counter > gs.combo_counter_prev and gs.combo_counter_prev >= 0 then
-            new_hit = true
-        elseif gs.waza_total ~= gs.waza_total_prev and gs.waza_total > 0 then
-            new_hit = true
-        end
-
-        if new_hit then
-            local action_id = gs.p1.action_string
-            -- Aegis activation shares action_id with Sphere_throw; remap when meter was consumed
-            if res.meter_consumed and SPHERE_TO_AEGIS[action_id] then
-                action_id = SPHERE_TO_AEGIS[action_id]
-            end
-            -- Deduplicate: don't add the same action_id consecutively (multi-hit moves)
-            if action_id ~= combo_tracker.last_action_id then
-                combo_tracker.last_action_id = action_id
-                local move_name = lookup_move_name(action_id)
+        local action = gs.p1.action_string
+        if action ~= combo_tracker.last_action_id then
+            local prefix = action:sub(1, 1)
+            if prefix == "A" or prefix == "S" then
+                combo_tracker.last_action_id = action
+                local move_name = lookup_move_name(action)
                 if not move_name then
-                    -- Build readable fallback: "spc?0021" instead of raw "S00210021"
                     local prefix_names = {
-                        A = "atk", S = "spc", T = "throw", G = "guard", M = "misc", N = ""
+                        A = "atk", S = "spc"
                     }
-                    local p = action_id:sub(1, 1)
-                    move_name = (prefix_names[p] or "") .. "?" .. action_id:sub(6)
+                    move_name = (prefix_names[prefix] or "") .. "?" .. action:sub(6)
                 end
                 table.insert(combo_tracker.moves, move_name)
 
                 -- Rebuild display string
                 combo_tracker.display_string = table.concat(combo_tracker.moves, " > ")
-                -- Truncate from left if too long
                 if #combo_tracker.display_string > 90 then
                     combo_tracker.display_string = "..." .. combo_tracker.display_string:sub(-87)
                 end
@@ -2152,8 +2145,11 @@ local function draw_header()
     -- Line 1 (y=2): "URIEN LAB" on left, status on right
     draw_text(4, 2, "URIEN LAB", COLOR.text_cyan)
 
-    -- Right side of line 1: recording status or opponent name
-    if capture.active then
+    -- Right side of line 1: recording status, preview status, or opponent name
+    if engine.demo.active then
+        local elapsed = engine.demo.frame
+        draw_text(SCREEN_W - 80, 2, "PREVIEW", COLOR.text_cyan)
+    elseif capture.active then
         local elapsed = game_state.frame_count - capture.start_frame
         -- Flash every 30 frames
         if math.floor(elapsed / 15) % 2 == 0 then
@@ -2643,7 +2639,11 @@ local function draw_exercise_list(menu_x, menu_y, menu_w, row_h, visible_rows, m
             end
             draw_text(hints_x, desc_y, "HP=Sort", COLOR.text_orange)
             draw_text(hints_x + 40, desc_y, "LK=Side", COLOR.text_cyan)
-            draw_text(hints_x + 80, desc_y, "MK=Tag", COLOR.text_yellow)
+            if engine.demo.recordings[sel.id] then
+                draw_text(hints_x + 80, desc_y, "MK=Preview", COLOR.text_green)
+            else
+                draw_text(hints_x + 80, desc_y, "MK=-", COLOR.text_gray)
+            end
             draw_text(hints_x + 120, desc_y, "HK=Del", COLOR.text_red)
         end
 
@@ -2962,6 +2962,10 @@ local function capture_start()
     capture.start_p1_x = game_state.p1.x_pos
     capture.start_p2_x = game_state.p2.x_pos
     capture.hit_count = 0
+    capture.last_action = game_state.p1.action_string
+    capture.combo_reset = false
+    capture.rec_log = {}              -- separate log for recording (never re-based)
+    capture.rec_start = game_state.frame_count
 
     -- Snapshot current setup state
     capture.setup_snapshot = {
@@ -3021,6 +3025,11 @@ local function capture_stop()
         table.insert(exercises, new_exercise)
         init_progression()
         rebuild_filtered_exercises()
+        -- Save input recording for preview playback (uses rec_log which
+        -- includes charge buildup frames before the first move)
+        local duration = game_state.frame_count - capture.rec_start
+        local recording = engine.demo.encode(capture.rec_log, duration)
+        engine.demo.save(new_exercise.id, recording)
         -- Open category selector instead of saving immediately
         cat_sel.active = true
         cat_sel.cursor = 1
@@ -3047,46 +3056,55 @@ local function capture_frame_update()
     local gs = game_state
     local frame_num = gs.frame_count - capture.start_frame
 
+    -- Record joypad state for playback (from original start, includes charge buildup)
+    capture.rec_log[gs.frame_count - capture.rec_start] = joypad.get() or {}
+
     -- Record this frame's joypad state for input notation detection
     capture.input_log[frame_num] = joypad.get() or {}
 
-    -- Detect normal/special hits (combo_counter only — waza_total fires on whiffs too)
-    local new_hit = false
-    if gs.combo_counter > gs.combo_counter_prev and gs.combo_counter > 0 then
-        new_hit = true
+    -- Track combo counter resets (for multi-combo sequences like unblockables)
+    if gs.combo_counter == 0 and gs.combo_counter_prev > 0 and capture.hit_count > 0 then
+        capture.combo_reset = true
     end
 
-    if new_hit then
-        -- On first hit, re-snapshot setup so exercise reflects combo start position
-        if capture.hit_count == 0 then
-            capture.start_frame = gs.frame_count
-            capture.start_p1_x = gs.p1.x_pos
-            capture.start_p2_x = gs.p2.x_pos
-            capture.setup_snapshot = {
-                p1_x = gs.p1.x_pos, p2_x = gs.p2.x_pos,
-                p1_flip = gs.p1.flip,
-                meter_bars = gs.meter_bars, meter_gauge = gs.meter_gauge,
-                corner = is_near_corner(gs.p2.x_pos),
-            }
-            -- Re-base frame number for this hit
-            frame_num = 0
+    -- Input-based detection: track P1 action changes to known moves.
+    -- Records moves in the order performed, not the order hits land.
+    -- Fixes ordering bugs where projectile hits (L.Sphere) were misattributed
+    -- to P1's current action (M.Aegis) when detected via combo counter.
+    local action = gs.p1.action_string
+    if action ~= capture.last_action then
+        capture.last_action = action
+        -- Only capture attacks (A) and specials/supers (S)
+        local prefix = action:sub(1, 1)
+        if prefix == "A" or prefix == "S" then
+            local move_name = lookup_move_name(action)
+            if move_name then
+                -- On first move, re-snapshot setup
+                if capture.hit_count == 0 then
+                    capture.start_frame = gs.frame_count
+                    frame_num = 0
+                    capture.start_p1_x = gs.p1.x_pos
+                    capture.start_p2_x = gs.p2.x_pos
+                    capture.setup_snapshot = {
+                        p1_x = gs.p1.x_pos, p2_x = gs.p2.x_pos,
+                        p1_flip = gs.p1.flip,
+                        meter_bars = gs.meter_bars, meter_gauge = gs.meter_gauge,
+                        corner = is_near_corner(gs.p2.x_pos),
+                    }
+                end
+
+                capture.hit_count = capture.hit_count + 1
+                table.insert(capture.sequence, {
+                    action_id = action,
+                    hit_type = "H",
+                    frame = frame_num,
+                })
+            end
         end
-        local action_id = gs.p1.action_string
-        local hit_type = "H"
-        -- Aegis activation shares action_id with Sphere_throw; remap when meter was consumed
-        if res.meter_consumed and SPHERE_TO_AEGIS[action_id] then
-            action_id = SPHERE_TO_AEGIS[action_id]
-            hit_type = "F"
-        end
-        capture.hit_count = capture.hit_count + 1
-        table.insert(capture.sequence, {
-            action_id = action_id,
-            hit_type = hit_type,
-            frame = frame_num,
-        })
     end
 
-    -- Detect projectile hits
+    -- Projectile scan: only for projectile-only moves not covered by action tracking
+    -- (e.g., Temporal Thunder F0068 which has no S/A-prefix in MOVES)
     local list = 3
     local obj_index = read_word_signed(MEM.obj_list_base + (list * 2))
     local count = 0
@@ -3101,14 +3119,37 @@ local function capture_frame_update()
             local hit_flg_prev = memory.readbyte(obj_addr + 0x189 + 0x04)
             if hit_flg ~= hit_flg_prev then
                 local proj_string = "F" .. string.format("%04x", tobi_id)
-                if memory.readbyte(obj_addr + 0x189 + 0x06) == 0 then
-                    capture.hit_count = capture.hit_count + 1
-                    table.insert(capture.sequence, {
-                        action_id = proj_string,
-                        hit_type = "F",
-                        frame = frame_num,
-                    })
-                    memory.writebyte(obj_addr + 0x189 + 0x06, 1)
+                -- Skip projectiles covered by action tracking (moves with both S/A and F IDs)
+                local covered = false
+                local pname = lookup_move_name(proj_string)
+                if pname and MOVES[pname] then
+                    for _, aid in ipairs(MOVES[pname].action_ids) do
+                        local ap = aid:sub(1,1)
+                        if ap == "A" or ap == "S" then covered = true; break end
+                    end
+                end
+                if not covered then
+                    if memory.readbyte(obj_addr + 0x189 + 0x06) == 0 then
+                        if capture.hit_count == 0 then
+                            capture.start_frame = gs.frame_count
+                            frame_num = 0
+                            capture.start_p1_x = gs.p1.x_pos
+                            capture.start_p2_x = gs.p2.x_pos
+                            capture.setup_snapshot = {
+                                p1_x = gs.p1.x_pos, p2_x = gs.p2.x_pos,
+                                p1_flip = gs.p1.flip,
+                                meter_bars = gs.meter_bars, meter_gauge = gs.meter_gauge,
+                                corner = is_near_corner(gs.p2.x_pos),
+                            }
+                        end
+                        capture.hit_count = capture.hit_count + 1
+                        table.insert(capture.sequence, {
+                            action_id = proj_string,
+                            hit_type = "F",
+                            frame = frame_num,
+                        })
+                        memory.writebyte(obj_addr + 0x189 + 0x06, 1)
+                    end
                 end
                 memory.writebyte(obj_addr + 0x189 + 0x04, hit_flg)
             end
@@ -3418,7 +3459,7 @@ build_exercise_from_capture = function()
     local final_frames = {}  -- frame timestamps for surviving entries (for ref_timing)
     local has_h_charge = false
     local has_v_charge = false
-    local has_combo_reset = false
+    local has_combo_reset = capture.combo_reset
     local last_frame = 0
 
     local prev_action_id = nil  -- for collapsing multi-hit moves
@@ -3432,23 +3473,17 @@ build_exercise_from_capture = function()
         prev_hit_frame = entry.frame
 
         if not is_multi_hit then
-            -- Skip non-attack entries (N=neutral, M=misc, G=guard, T=throw)
-            -- These appear during combo counter resets in multi-combo Aegis setups
-            local entry_prefix = entry.action_id:sub(1, 1)
-            if entry_prefix == "N" or entry_prefix == "M" or entry_prefix == "G" or entry_prefix == "T" then
-                has_combo_reset = true
-            else
-                prev_action_id = entry.action_id
+            prev_action_id = entry.action_id
 
-                -- Try MOVES lookup first (authoritative source of truth)
+            -- Try MOVES lookup first (authoritative source of truth)
                 local move_name, sf, numpad, move_type = lookup_move_name(entry.action_id)
 
                 if move_name then
-                    -- Known move: use database notation
+                    -- Known move: use all MOVES action_ids so any spacing variant matches
                     table.insert(sequence, {
                         name = move_name,
                         hit_type = entry.hit_type,
-                        action_ids = { entry.action_id },
+                        action_ids = MOVES[move_name].action_ids,
                     })
                     table.insert(final_frames, entry.frame)
                     table.insert(notations_sf, sf)
@@ -3494,8 +3529,7 @@ build_exercise_from_capture = function()
                     table.insert(move_names, display_name)
                 end
 
-                last_frame = entry.frame
-            end
+            last_frame = entry.frame
         end
     end
 
@@ -3729,6 +3763,22 @@ local function load_exercises_from_file(path, shipped_flag)
                             for aid in ids_str:gmatch("[^;]+") do
                                 table.insert(action_ids, normalize_action_string(aid))
                             end
+                            -- Expand to all known variants from MOVES database
+                            -- so any spacing variant matches (e.g. st.MP close/far)
+                            if MOVES[name] then
+                                action_ids = MOVES[name].action_ids
+                                -- Convert F-type to H-type for moves with S/A-prefix IDs
+                                -- (input-based matching via action changes, not projectile scan)
+                                if hit_type == "F" then
+                                    for _, aid in ipairs(action_ids) do
+                                        local ap = aid:sub(1,1)
+                                        if ap == "A" or ap == "S" then
+                                            hit_type = "H"
+                                            break
+                                        end
+                                    end
+                                end
+                            end
                             table.insert(current.sequence, {
                                 name = name,
                                 hit_type = hit_type,
@@ -3847,6 +3897,18 @@ local function load_tutorial_chapters()
                             for aid in ids_str:gmatch("[^;]+") do
                                 table.insert(action_ids, normalize_action_string(aid))
                             end
+                            if MOVES[name] then
+                                action_ids = MOVES[name].action_ids
+                                if hit_type == "F" then
+                                    for _, aid in ipairs(action_ids) do
+                                        local ap = aid:sub(1,1)
+                                        if ap == "A" or ap == "S" then
+                                            hit_type = "H"
+                                            break
+                                        end
+                                    end
+                                end
+                            end
                             table.insert(current_lesson.sequence, {
                                 name = name,
                                 hit_type = hit_type,
@@ -3930,6 +3992,237 @@ local function reload_exercises()
     rebuild_filtered_exercises()
     print("[Urien Lab] Reloaded " .. #exercises .. " exercises")
 end
+
+-- ============================================================================
+-- [11d] PREVIEW / DEMO SYSTEM
+-- ============================================================================
+-- Records per-frame inputs during capture and plays them back as previews.
+-- Recordings stored in urien_lab_recordings.txt, keyed by exercise ID.
+-- Delta-encoded hex bitmask: only frames where input changes are stored.
+
+do -- scope demo helpers
+    local demo = engine.demo
+    local INPUT_BITS = {
+        ["P1 Up"] = 0x001, ["P1 Down"] = 0x002,
+        ["P1 Left"] = 0x004, ["P1 Right"] = 0x008,
+        ["P1 Weak Punch"] = 0x010, ["P1 Medium Punch"] = 0x020,
+        ["P1 Strong Punch"] = 0x040,
+        ["P1 Weak Kick"] = 0x080, ["P1 Medium Kick"] = 0x100,
+        ["P1 Strong Kick"] = 0x200,
+    }
+
+    --- Encode input_log into delta-compressed recording
+    function demo.encode(input_log, duration)
+        local deltas = {}
+        local prev_mask = 0
+        for f = 0, duration do
+            local state = input_log[f]
+            local mask = 0
+            if state then
+                for name, bit in pairs(INPUT_BITS) do
+                    if state[name] then mask = mask + bit end
+                end
+            end
+            if mask ~= prev_mask then
+                table.insert(deltas, { frame = f, mask = mask })
+                prev_mask = mask
+            end
+        end
+        return { duration = duration, deltas = deltas }
+    end
+
+    --- Serialize recording to string: "duration,frame:hex,frame:hex,..."
+    function demo.serialize(rec)
+        local parts = { tostring(rec.duration) }
+        for _, d in ipairs(rec.deltas) do
+            table.insert(parts, d.frame .. ":" .. string.format("%03x", d.mask))
+        end
+        return table.concat(parts, ",")
+    end
+
+    --- Deserialize recording from string
+    function demo.deserialize(str)
+        local iter = str:gmatch("[^,]+")
+        local duration = tonumber(iter()) or 0
+        local deltas = {}
+        for part in iter do
+            local f, m = part:match("^(%d+):(%x+)")
+            if f then
+                table.insert(deltas, { frame = tonumber(f), mask = tonumber(m, 16) })
+            end
+        end
+        return { duration = duration, deltas = deltas }
+    end
+
+    --- Convert bitmask to joypad table for joypad.set()
+    --- Only includes buttons that should be pressed (true).
+    --- Omitting a button lets physical input through; setting false would
+    --- only clear a prior script override without suppressing the physical pad.
+    function demo.mask_to_joypad(mask)
+        local inputs = {}
+        for name, bit in pairs(INPUT_BITS) do
+            if math.floor(mask / bit) % 2 == 1 then
+                inputs[name] = true
+            end
+        end
+        return inputs
+    end
+
+    --- Save a recording to file (append)
+    function demo.save(exercise_id, recording)
+        demo.recordings[exercise_id] = recording
+        local f = io.open("urien_lab_recordings.txt", "a")
+        if f then
+            f:write("---\n")
+            f:write("ID:" .. exercise_id .. "\n")
+            f:write("REC:" .. demo.serialize(recording) .. "\n")
+            f:write("---\n")
+            f:close()
+            print("[Preview] Saved recording for " .. exercise_id)
+        end
+    end
+
+    --- Load all recordings from file
+    function demo.load_all()
+        local f = io.open("urien_lab_recordings.txt", "r")
+        if not f then return 0 end
+        local count = 0
+        local current_id = nil
+        for line in f:lines() do
+            if line == "---" then
+                current_id = nil
+            else
+                local key, value = line:match("^(%w+):(.*)")
+                if key == "ID" then
+                    current_id = value
+                elseif key == "REC" and current_id then
+                    demo.recordings[current_id] = demo.deserialize(value)
+                    count = count + 1
+                    current_id = nil
+                end
+            end
+        end
+        f:close()
+        if count > 0 then
+            print("[Preview] Loaded " .. count .. " recordings")
+        end
+        return count
+    end
+
+    --- Start preview playback for an exercise
+    function demo.start(exercise_index)
+        local ex = exercises[exercise_index]
+        if not ex then return false end
+        local rec = demo.recordings[ex.id]
+        if not rec then
+            print("[Preview] No recording for " .. ex.id)
+            return false
+        end
+        -- Set up exercise via select_exercise (handles all engine state)
+        select_exercise(exercise_index)
+        demo.active = true
+        demo.recording = rec
+        demo.frame = 0
+        demo.delta_idx = 1
+        demo.current_mask = 0
+        demo.duration = rec.duration
+        demo.inputs_released = false
+        -- Pre-load the first real input so frame 0 of playback immediately
+        -- forces the intended move via joypad.set(true), overriding any
+        -- leaked physical button press from the menu
+        for _, d in ipairs(rec.deltas) do
+            if d.mask ~= 0 then
+                demo.current_mask = d.mask
+                demo.delta_idx = 2  -- skip past the pre-loaded entry
+                demo.frame = d.frame -- sync frame counter
+                break
+            end
+        end
+        -- Freeze game immediately so the menu button press doesn't leak
+        memory.writebyte(MEM.game_freeze, 0xFF)
+        return true
+    end
+
+    --- Stop preview playback
+    function demo.stop()
+        demo.active = false
+        demo.recording = nil
+        demo.frame = 0
+        demo.delta_idx = 1
+        demo.current_mask = 0
+        demo.inputs_released = false
+        engine.state = STATE_IDLE
+    end
+
+    --- Per-frame preview update: inject recorded inputs
+    function demo.frame_update()
+        if not demo.active or not demo.recording then return end
+
+        -- Wait for exercise setup and button release before injecting
+        if engine.state ~= STATE_ACTIVE then return end
+        if not demo.inputs_released then return end
+
+        -- Re-apply setup on first frames to undo any menu button effect
+        -- (joypad.set cannot suppress physical P1 input in FBNeo)
+        if demo.frame < 2 then
+            apply_exercise_setup(engine.current_exercise)
+        end
+
+        -- Advance through delta entries
+        local rec = demo.recording
+        while demo.delta_idx <= #rec.deltas and rec.deltas[demo.delta_idx].frame <= demo.frame do
+            demo.current_mask = rec.deltas[demo.delta_idx].mask
+            demo.delta_idx = demo.delta_idx + 1
+        end
+
+        -- Inject recorded inputs using Grouflon's read-modify-write pattern:
+        -- read full state, clear all P1, set demo inputs, write full state back.
+        -- A full-state joypad.set() suppresses physical input (partial does not).
+        local inputs = joypad.get()
+        for name, _ in pairs(INPUT_BITS) do
+            inputs[name] = false
+        end
+        for name, bit in pairs(INPUT_BITS) do
+            if math.floor(demo.current_mask / bit) % 2 == 1 then
+                inputs[name] = true
+            end
+        end
+        joypad.set(inputs)
+
+        demo.frame = demo.frame + 1
+
+        -- End when recording finishes (+ 60f buffer for final hits to land)
+        if demo.frame > demo.duration + 60 then
+            demo.stop()
+        end
+    end
+
+    --- Check if user pressed any button to exit preview.
+    --- Waits for all buttons to be released first (so the MK that started
+    --- preview doesn't immediately stop it).
+    function demo.check_exit()
+        if not demo.active then return end
+        local physical = joypad.get()
+        if not physical then return end
+        local exit_buttons = {
+            "P1 Weak Punch", "P1 Medium Punch", "P1 Strong Punch",
+            "P1 Weak Kick", "P1 Medium Kick", "P1 Strong Kick",
+            "P1 Start",
+        }
+        local any_held = false
+        for _, key in ipairs(exit_buttons) do
+            if physical[key] then any_held = true; break end
+        end
+        if not demo.inputs_released then
+            -- Wait for user to release all buttons first
+            if not any_held then
+                demo.inputs_released = true
+            end
+        elseif any_held then
+            demo.stop()
+        end
+    end
+end -- scope demo helpers
 
 -- ============================================================================
 -- [12] MAIN LOOP CALLBACKS
@@ -4256,31 +4549,12 @@ local function handle_menu_input()
                 save_progression()
             end
         elseif is_pressed("P1 Medium Kick") then
-            -- Toggle current opponent tag on highlighted exercise
+            -- Preview: play back recorded inputs for selected exercise
             local real_idx = ex_list[cur]
-            local sel = real_idx and exercises[real_idx]
-            if sel and selected_opponent then
-                local opp = selected_opponent.name
-                if not sel.characters then sel.characters = {} end
-                local found = false
-                for j, char_name in ipairs(sel.characters) do
-                    if char_name == opp then
-                        table.remove(sel.characters, j)
-                        found = true
-                        print("[Urien Lab] Untagged " .. opp .. " from " .. sel.name)
-                        break
-                    end
+            if real_idx then
+                if engine.demo.start(real_idx) then
+                    menu.show = false
                 end
-                if not found then
-                    table.insert(sel.characters, opp)
-                    print("[Urien Lab] Tagged " .. sel.name .. " for " .. opp)
-                end
-                if sel.shipped then
-                    print("[Urien Lab] Tag change is session-only for shipped exercises")
-                else
-                    save_exercises()
-                end
-                rebuild_filtered_exercises()
             end
         end
 
@@ -4536,6 +4810,11 @@ local function on_frame()
     -- APP_TRAINING
     if not game_state.playing then return end
 
+    -- Preview: check for exit (input injection happens at end of frame)
+    if engine.demo.active then
+        engine.demo.check_exit()
+    end
+
     handle_input()
 
     if not menu.show then
@@ -4574,6 +4853,12 @@ local function on_frame()
         else
             lock_dummy()
         end
+    end
+
+    -- Preview: inject recorded P1 inputs LAST so they aren't overwritten
+    -- by other joypad.set() calls (FBNeo: last call wins per key)
+    if engine.demo.active then
+        engine.demo.frame_update()
     end
 end
 
@@ -4622,11 +4907,21 @@ local function on_gui()
                 menu.was_frozen = false
             end
         end
-        if menu_active or menu.was_frozen then
+        local should_freeze = menu_active or menu.was_frozen
+            or (engine.demo.active and not engine.demo.inputs_released)
+        if should_freeze then
             memory.writebyte(MEM.game_freeze, 0xFF)
         else
+            if menu.just_unfroze then
+                -- Refill meter immediately on unfreeze (no 90f wait)
+                fill_meter_full()
+                res.meter_consumed = false
+                res.meter_refill = 0
+                menu.just_unfroze = false
+            end
             memory.writebyte(MEM.game_freeze, 0x00)
         end
+        menu.just_unfroze = should_freeze
 
         -- Freeze round timer (infinite time)
         memory.writebyte(MEM.round_timer, 100)
@@ -4743,6 +5038,10 @@ local function on_savestate_load()
     combo_tracker.last_action_id = nil
     combo_tracker.fade_timer = 0
     combo_tracker.active = false
+    -- Re-freeze after save state load so menu button presses don't leak
+    -- (save state restores game_freeze to 0x00, overwriting our freeze)
+    memory.writebyte(MEM.game_freeze, 0xFF)
+    menu.was_frozen = true
 end
 
 --- Emulator start callback
@@ -4798,6 +5097,7 @@ load_tutorial_chapters()
 
 -- Load exercises FIRST (before progression, so init_progression sees exercise IDs)
 load_exercises()
+engine.demo.load_all()
 -- Load saved progress, matchup slots, and character states
 load_progression()
 rebuild_filtered_exercises()
@@ -4879,7 +5179,7 @@ print("    Coin      = Open main menu")
 print("    Start     = Toggle recording")
 print("    Left/Right= Switch tabs (Tutorial/All/Character/Opponent)")
 print("    LK        = Toggle exercise side (L/R)")
-print("    MK        = Tag/untag opponent on exercise")
+print("    MK        = Preview recorded combo")
 print("    MP        = Stop exercise (in menu)")
 print("  Alt+1       = Return to character select")
 print("  Alt+2       = Toggle notation (SF/Numpad)")
